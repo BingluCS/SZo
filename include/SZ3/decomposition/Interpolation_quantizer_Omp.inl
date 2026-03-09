@@ -892,9 +892,9 @@ namespace SZ3 {
         }
     }
 #elif defined(__ARM_FEATURE_SVE2) 
-template <TUNING Tuning, class T, uint N, class Quantizer>
+    template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::interp_linear_and_quantize_1D(const T * buf, const size_t &len, T* data, 
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_linear_and_quantize_1D(const T * buf, const size_t &len, T* data, 
         size_t&  offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
         if(len == 1)
             return;
@@ -1053,9 +1053,9 @@ template <TUNING Tuning, class T, uint N, class Quantizer>
         quantize_func(cur_ij_offset + last * offset , data[last * offset], pred_edge, tid);
     }
 
-    template <TUNING Tuning, class T, uint N, class Quantizer>
+    template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::interp_cubic_and_quantize_1D(const T * buf, const size_t &len, T* data, 
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_cubic_and_quantize_1D(const T * buf, const size_t &len, T* data, 
         size_t&  offset, size_t& cur_ij_offset, int tid,  QuantizeFunc &&quantize_func) {
        // assert(len <= max_dim);
         if(len == 1)
@@ -1258,9 +1258,9 @@ template <TUNING Tuning, class T, uint N, class Quantizer>
         }
     }
 
-    template <TUNING Tuning, class T, uint N, class Quantizer>
+    template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::interp_linear_and_quantize(const T * a, const T* b, size_t &len, T* data, 
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_linear_and_quantize(const T * a, const T* b, size_t &len, T* data, 
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
         
         size_t i = 0;
@@ -1293,9 +1293,9 @@ template <TUNING Tuning, class T, uint N, class Quantizer>
         }
     }
 
-    template <TUNING Tuning, class T, uint N, class Quantizer>
+    template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::interp_cubic_and_quantize(const T * a, const T* b, T* c, T*d, size_t &len, T* data, 
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_cubic_and_quantize(const T * a, const T* b, T* c, T*d, size_t &len, T* data, 
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
 
         size_t i = 0;
@@ -1345,9 +1345,9 @@ template <TUNING Tuning, class T, uint N, class Quantizer>
         }
     }
     
-    template <TUNING Tuning, class T, uint N, class Quantizer>
+    template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::interp_equal_and_quantize(const T * a, size_t &len, T* data, 
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_equal_and_quantize(const T * a, size_t &len, T* data, 
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
@@ -1372,9 +1372,9 @@ template <TUNING Tuning, class T, uint N, class Quantizer>
         }
     }
 
-    template <TUNING Tuning, class T, uint N, class Quantizer>
+    template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::interp_linear1_and_quantize(const T * a, const T* b, size_t &len, T* data, 
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_linear1_and_quantize(const T * a, const T* b, size_t &len, T* data, 
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
   
         size_t i = 0;
@@ -1405,9 +1405,9 @@ template <TUNING Tuning, class T, uint N, class Quantizer>
         }
     }
 
-    template <TUNING Tuning, class T, uint N, class Quantizer>
+    template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::interp_quad1_and_quantize(const T * a, const T* b, const T* c, size_t &len, T* data, 
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_quad1_and_quantize(const T * a, const T* b, const T* c, size_t &len, T* data, 
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
 
         size_t i = 0;
@@ -1444,9 +1444,9 @@ template <TUNING Tuning, class T, uint N, class Quantizer>
         }      
     }
 
-    template <TUNING Tuning, class T, uint N, class Quantizer>
+    template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::interp_quad2_and_quantize (const T * a, const T* b, const T* c, size_t &len, T* data, 
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_quad2_and_quantize (const T * a, const T* b, const T* c, size_t &len, T* data, 
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
@@ -1486,9 +1486,9 @@ template <TUNING Tuning, class T, uint N, class Quantizer>
       
     }
 
-    template <TUNING Tuning, class T, uint N, class Quantizer>
+    template <class T, uint N, class QuantizerOMP>
     template<typename U, typename>
-    ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::quantize_1D_float (
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::quantize_1D_float (
         svfloat32_t& sum, svfloat32_t& ori_sve, svfloat32_t& quant_sve, T* tmp, svbool_t& pg, svbool_t& pg64) {
             
             svfloat64_t quant_even_f64 = svcvt_f64_f32_x(pg64, quant_sve);
@@ -1534,9 +1534,9 @@ template <TUNING Tuning, class T, uint N, class Quantizer>
             quant_sve = svsel_f32(pg_in_range, quant_sve, svdup_n_f32(0.0));
     }
 
-    template <TUNING Tuning, class T, uint N, class Quantizer>
+    template <class T, uint N, class QuantizerOMP>
     template<typename U, typename>
-    ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::quantize_1D_double (
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::quantize_1D_double (
         svfloat64_t& sum, svfloat64_t& ori_sve, svfloat64_t& quant_sve, T* tmp, svbool_t& pg64) {
             
         quant_sve = svrintn_f64_x(pg64, svmul_n_f64_x(pg64, quant_sve, real_ebx2_r));
@@ -1555,9 +1555,9 @@ template <TUNING Tuning, class T, uint N, class Quantizer>
         quant_sve = svsel_f64(pg_in_range, quant_sve, svdup_n_f64(0.0));
     }
 
-    template <TUNING Tuning, class T, uint N, class Quantizer>
+    template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, typename U, typename>
-    ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::quantize_float (svfloat32_t& sum, size_t& start, T*& data, size_t& offset, 
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::quantize_float (svfloat32_t& sum, size_t& start, T*& data, size_t& offset, 
         size_t& len, const size_t& step, svbool_t& pg, svbool_t& pg64, int tid) {
         if constexpr (CompMode == COMPMODE::COMP) {
             T ori[step];
@@ -1658,9 +1658,9 @@ template <TUNING Tuning, class T, uint N, class Quantizer>
         }
     }
 
-    template <TUNING Tuning, class T, uint N, class Quantizer>
+    template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, typename U, typename>
-    ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::quantize_double (svfloat64_t& sum, size_t& start, T*& data, size_t& offset, 
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::quantize_double (svfloat64_t& sum, size_t& start, T*& data, size_t& offset, 
         size_t& len, const size_t& step, svbool_t& pg64, int tid) {
         if constexpr (CompMode == COMPMODE::COMP) {
             T ori[step];
