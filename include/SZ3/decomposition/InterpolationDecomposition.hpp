@@ -1289,8 +1289,11 @@ template <COMPMODE CompMode, class QuantizeFunc>
     double interpolation(T *data, std::array<size_t, N> begin, std::array<size_t, N> end,
                          const std::string &interp_func, QuantizeFunc &&quantize_func, const int direction,
                          size_t stride = 1) {
+#ifdef __ARM_FEATURE_SVE2
         std::tie(real_eb, real_ebx2, real_ebx2_r) = quantizer.get_all_eb();
+#endif
 #ifdef __AVX2__
+        std::tie(real_eb, real_ebx2, real_ebx2_r) = quantizer.get_all_eb();
         ebx2_r_avx = _mm256_set1_pd(real_ebx2_r);
         ebx2_avx = _mm256_set1_pd(real_ebx2);
         if constexpr (std::is_same_v<T, float>) {

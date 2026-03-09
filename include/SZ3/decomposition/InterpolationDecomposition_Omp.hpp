@@ -407,7 +407,9 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                 interp_level = max_interpolation_level;
             }
         }
-
+#ifdef __ARM_FEATURE_SVE2
+        SVE2_parallelism = svcntb() / sizeof(T);
+#endif
 #ifdef __AVX2__
         radius_avx = _mm256_set1_pd(radius);
         nradius_avx = _mm256_set1_pd(-radius);
@@ -1611,10 +1613,27 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     ALWAYS_INLINE void quantize_1D_double (__m256d& sum, __m256d& ori_avx, __m256d& quant_avx, T tmp[4]);
 
     template <COMPMODE CompMode, int step, typename U = T, typename = std::enable_if_t<std::is_same_v<U, float>>>
-    ALWAYS_INLINE void quantize_float (__m256 sum, size_t& start, T*& data, size_t& offset, size_t& len, int tid);
+    ALWAYS_INLINE void quantize_float (__m256& sum, size_t& start, T*& data, size_t& offset, size_t& len, int tid);
 
     template <COMPMODE CompMode, int step, typename U = T, typename = std::enable_if_t<std::is_same_v<U, double>>>
-    ALWAYS_INLINE void quantize_double (__m256d sum, size_t& start, T*& data, size_t& offset, size_t& len, int tid);
+    ALWAYS_INLINE void quantize_double (__m256d& sum, size_t& start, T*& data, size_t& offset, size_t& len, int tid);
+#endif
+#ifdef __ARM_FEATURE_SVE2
+    template<typename U = T, typename = std::enable_if_t<std::is_same_v<U, float>>>
+    ALWAYS_INLINE void quantize_1D_float (svfloat32_t& sum, svfloat32_t& ori_sve, svfloat32_t& quant_sve, T* tmp, 
+        svbool_t& pg, svbool_t& pg64);
+    
+    template<typename U = T, typename = std::enable_if_t<std::is_same_v<U, double>>>
+    ALWAYS_INLINE void quantize_1D_double (svfloat64_t& sum, svfloat64_t& ori_sve, svfloat64_t& quant_sve, T* tmp, 
+        svbool_t& pg64);
+    template <COMPMODE CompMode, typename U = T, typename = std::enable_if_t<std::is_same_v<U, float>>>
+    ALWAYS_INLINE void quantize_float (svfloat32_t& sum, size_t& start, T*& data, size_t& offset, size_t& len, 
+        const size_t& step, svbool_t& pg, svbool_t& pg64, int tid);
+
+    template <COMPMODE CompMode, typename U = T, typename = std::enable_if_t<std::is_same_v<U, double>>>
+    ALWAYS_INLINE void quantize_double (svfloat64_t& sum, size_t& start, T*& data, size_t& offset, size_t& len, 
+        const size_t& step, svbool_t& pg64, int tid);
+
 #endif
     // void interp_cubic(const T * a,const T * b,const T * c,const T * d,T * p, const size_t &len){
     //    // assert(len <= max_dim);
@@ -3053,6 +3072,9 @@ template <COMPMODE CompMode, class QuantizeFunc>
     double interpolation(T *data, std::array<size_t, N> begin, std::array<size_t, N> end,
                          const std::string &interp_func, QuantizeFunc &&quantize_func, const int direction,
                          size_t stride = 1) {
+#ifdef __ARM_FEATURE_SVE2
+        std::tie(real_eb, real_ebx2, real_ebx2_r) = quantizer.get_all_eb();
+#endif
 #ifdef __AVX2__
         std::tie(real_eb, real_ebx2, real_ebx2_r) = quantizer.get_all_eb();
         ebx2_r_avx = _mm256_set1_pd(real_ebx2_r);
@@ -3263,7 +3285,9 @@ template <COMPMODE CompMode, class QuantizeFunc>
     __m256d nrel_eb_avx_d;
     __m128i radius_avx_128i;
 #endif
-
+#ifdef __ARM_FEATURE_SVE2
+    int SVE2_parallelism;
+#endif
     //std::vector<size_t> level_prefix;
     //std::vector<std::array<size_t,N> >reduced_dim_offsets;
 

@@ -1475,7 +1475,6 @@ namespace SZ3 {
         else if constexpr (std::is_same_v<T, double>) {
 
             const size_t step = SVE2_parallelism;
-            svbool_t pg = svptrue_b32();
             svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
