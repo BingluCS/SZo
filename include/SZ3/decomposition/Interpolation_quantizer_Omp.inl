@@ -895,7 +895,7 @@ namespace SZ3 {
     template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, class QuantizeFunc>
     ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_linear_and_quantize_1D(const T * buf, const size_t &len, T* data, 
-        size_t&  offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
+        size_t&  offset, size_t& cur_ij_offset, int& tid, QuantizeFunc &&quantize_func) {
         if(len == 1)
             return;
 
@@ -1056,7 +1056,7 @@ namespace SZ3 {
     template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, class QuantizeFunc>
     ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_cubic_and_quantize_1D(const T * buf, const size_t &len, T* data, 
-        size_t&  offset, size_t& cur_ij_offset, int tid,  QuantizeFunc &&quantize_func) {
+        size_t&  offset, size_t& cur_ij_offset, int& tid,  QuantizeFunc &&quantize_func) {
        // assert(len <= max_dim);
         if(len == 1)
             return;
@@ -1319,7 +1319,7 @@ namespace SZ3 {
                 sum = svmul_n_f32_x(pg, sum, 0.0625f);
                 
                 // _mm256_storeu_ps(p + i, sum);
-                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64);
+                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
@@ -1340,7 +1340,7 @@ namespace SZ3 {
                 sum = svsub_f64_x(pg64, sum, vd);
                 sum = svmul_n_f64_x(pg64, sum, 0.0625);
 
-                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64);
+                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
             }
         }
     }
@@ -1358,7 +1358,7 @@ namespace SZ3 {
             for (; i  < len; i += step) {
                 svfloat32_t sum = svld1(pg, &a[i]);                
                 // _mm256_storeu_ps(p + i, sum);
-                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64);
+                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
@@ -1367,7 +1367,7 @@ namespace SZ3 {
 
             for (; i  < len; i += step) {
                 svfloat64_t sum = svld1(pg64, &a[i]);                
-                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64);
+                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
             }
         }
     }
@@ -1388,7 +1388,7 @@ namespace SZ3 {
                 vb = svmul_n_f32_x(pg, vb, 1.5f);
                 svfloat32_t sum = svmls_n_f32_x(pg, vb, va, 0.5f);
                 // _mm256_storeu_ps(p + i, sum);
-                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64);
+                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
@@ -1400,7 +1400,7 @@ namespace SZ3 {
                 svfloat64_t vb = svld1(pg64, &b[i]);
                 vb = svmul_n_f64_x(pg64, vb, 1.5);
                 svfloat64_t sum = svmls_n_f64_x(pg64, vb, va, 0.5);
-                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64);
+                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
             }
         }
     }
@@ -1424,7 +1424,7 @@ namespace SZ3 {
                 svfloat32_t sum = svmla_n_f32_x(pg, vb, va, 3.0f);
                 sum = svmul_n_f32_x(pg, sum, 0.125f);
                 // _mm256_storeu_ps(p + i, sum);
-                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64);
+                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
@@ -1438,7 +1438,7 @@ namespace SZ3 {
                 svfloat64_t va = svld1(pg64, &a[i]);  
                 svfloat64_t sum = svmla_n_f64_x(pg64, vb, va, 3.0);
                 sum = svmul_n_f64_x(pg64, sum, 0.125);
-                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64);
+                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
             }
 
         }      
@@ -1463,7 +1463,7 @@ namespace SZ3 {
                 svfloat32_t sum = svmla_n_f32_x(pg, vb, vc, 3.0f);
                 sum = svmul_n_f32_x(pg, sum, 0.125f);
                 // _mm256_storeu_ps(p + i, sum);
-                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64);
+                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
@@ -1480,7 +1480,7 @@ namespace SZ3 {
                 svfloat64_t sum = svmla_n_f64_x(pg64, vb, vc, 3.0);
                 sum = svmul_n_f64_x(pg64, sum, 0.125);
                 // _mm256_storeu_ps(p + i, sum);
-                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64);
+                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
             }
         }   
       

@@ -21,6 +21,10 @@
 #include <immintrin.h>
 #endif
 
+#ifdef __ARM_FEATURE_SVE2
+#include <arm_sve.h>
+#endif
+
 namespace SZ3 {
 template <class T, uint N, class QuantizerOMP>
 class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_OMP<T, int, N> {
