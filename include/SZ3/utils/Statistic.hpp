@@ -16,6 +16,53 @@
 #endif
 
 namespace SZ3 {
+
+#ifdef __ARM_FEATURE_SVE2
+// Helper: SVE2 min/max over a contiguous chunk [begin, end).
+// Must live in its own target("sve2") function to avoid GCC ICE
+// when SVE intrinsics are instantiated inside an omp parallel region.
+__attribute__((target("sve2")))
+inline void sve2_minmax_f32(const float *data, size_t begin, size_t end,
+                             float &out_min, float &out_max) {
+    const size_t vl = svcntw();
+    svbool_t pg = svptrue_b32();
+    svfloat32_t vmax = svdup_f32(data[begin]);
+    svfloat32_t vmin = svdup_f32(data[begin]);
+    size_t i = begin;
+    for (; i + vl <= end; i += vl) {
+        svfloat32_t v = svld1_f32(pg, data + i);
+        vmax = svmax_f32_x(pg, vmax, v);
+        vmin = svmin_f32_x(pg, vmin, v);
+    }
+    out_max = svmaxv_f32(pg, vmax);
+    out_min = svminv_f32(pg, vmin);
+    for (; i < end; ++i) {
+        out_max = std::max(out_max, data[i]);
+        out_min = std::min(out_min, data[i]);
+    }
+}
+
+__attribute__((target("sve2")))
+inline void sve2_minmax_f64(const double *data, size_t begin, size_t end,
+                              double &out_min, double &out_max) {
+    const size_t vl = svcntd();
+    svbool_t pg = svptrue_b64();
+    svfloat64_t vmax = svdup_f64(data[begin]);
+    svfloat64_t vmin = svdup_f64(data[begin]);
+    size_t i = begin;
+    for (; i + vl <= end; i += vl) {
+        svfloat64_t v = svld1_f64(pg, data + i);
+        vmax = svmax_f64_x(pg, vmax, v);
+        vmin = svmin_f64_x(pg, vmin, v);
+    }
+    out_max = svmaxv_f64(pg, vmax);
+    out_min = svminv_f64(pg, vmin);
+    for (; i < end; ++i) {
+        out_max = std::max(out_max, data[i]);
+        out_min = std::min(out_min, data[i]);
+    }
+}
+#endif
 template <class T>
 T data_range(const T *data, size_t num) {
 
@@ -38,12 +85,21 @@ T data_range(const T *data, size_t num) {
     constexpr bool is_double = std::is_same_v<T, double>;
     if constexpr (is_float) {
 #ifdef _OPENMP
-        // GCC ICE: SVE intrinsics cannot be used inside any omp parallel region
-        // (including with nowait) on this compiler version. Use scalar OMP only.
-        #pragma omp parallel for reduction(min:min_val) reduction(max:max_val)
-        for (size_t i = 0; i < num; ++i) {
-            if (data[i] > max_val) max_val = data[i];
-            if (data[i] < min_val) min_val = data[i];
+        // Call SVE2 via a separate target("sve2") function to avoid GCC ICE
+        // when SVE intrinsics appear inside an omp parallel region.
+        #pragma omp parallel reduction(min:min_val) reduction(max:max_val)
+        {
+            float t_max = data[0], t_min = data[0];
+            #pragma omp for schedule(static) nowait
+            for (size_t i = 0; i < num; i += svcntw()) {
+                size_t end = std::min(i + svcntw(), num);
+                float chunk_min, chunk_max;
+                sve2_minmax_f32(data, i, end, chunk_min, chunk_max);
+                t_max = std::max(t_max, chunk_max);
+                t_min = std::min(t_min, chunk_min);
+            }
+            max_val = std::max(max_val, t_max);
+            min_val = std::min(min_val, t_min);
         }
         return max_val - min_val;
 #else
@@ -67,11 +123,19 @@ T data_range(const T *data, size_t num) {
 #endif
     } else if constexpr (is_double) {
 #ifdef _OPENMP
-        // Same GCC ICE issue with SVE + OMP: use scalar OMP only.
-        #pragma omp parallel for reduction(min:min_val) reduction(max:max_val)
-        for (size_t i = 0; i < num; ++i) {
-            if (data[i] > max_val) max_val = data[i];
-            if (data[i] < min_val) min_val = data[i];
+        #pragma omp parallel reduction(min:min_val) reduction(max:max_val)
+        {
+            double t_max = data[0], t_min = data[0];
+            #pragma omp for schedule(static) nowait
+            for (size_t i = 0; i < num; i += svcntd()) {
+                size_t end = std::min(i + svcntd(), num);
+                double chunk_min, chunk_max;
+                sve2_minmax_f64(data, i, end, chunk_min, chunk_max);
+                t_max = std::max(t_max, chunk_max);
+                t_min = std::min(t_min, chunk_min);
+            }
+            max_val = std::max(max_val, t_max);
+            min_val = std::min(min_val, t_min);
         }
         return max_val - min_val;
 #else
