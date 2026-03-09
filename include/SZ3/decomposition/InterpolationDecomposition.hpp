@@ -199,8 +199,7 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
         delete [] interp_buffer_3;
         delete [] interp_buffer_4;
         // delete [] pred_buffer;
-        if constexpr (Tuning == TUNING::DISABLED)
-            std::cout << "Quantization size : " << quant_index << std::endl;
+
         return {quant_inds, quant_index};
     }
 

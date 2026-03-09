@@ -61,6 +61,16 @@ class HuffmanEncoder : public concepts::EncoderInterface<T> {
             sysEndianType = 1;
     }
 
+    struct alignas(8) TableEntry {
+        int symbol = 0;       
+        int  code_len = 0;
+        uint8_t  is_leaf = 0; 
+    };
+
+    int usingTable = 0;
+    std::vector<TableEntry>              L1_table;
+    int L1 = 10;   
+
     ~HuffmanEncoder() override { SZ_FreeHuffman(); }
 
     // build huffman tree
@@ -148,15 +158,13 @@ class HuffmanEncoder : public concepts::EncoderInterface<T> {
 
     void save(uchar *&c) override {
         // 写 offset
-        write(offset, c);
-
-        // 写 stateNum
-       // std::cout<<offset<<std::endl;
+        int x =(usingTable & 1u) << 31 | offset;
+        write(x, c);
+        // usingTable = 1;
+        // write(usingTable, c);
         int stateNum = static_cast<int>(huffmanTree->stateNum);
-        // std::cout<<stateNum<<std::endl;
         int32ToBytes_bigEndian(c, stateNum);
         c += sizeof(int);
-
         // 写最大码长（可选，但有用）
         //unsigned char maxLen = static_cast<unsigned char>(canonMaxLen);
         //*c++ = maxLen;
@@ -268,13 +276,7 @@ class HuffmanEncoder : public concepts::EncoderInterface<T> {
     
         T* decode(const uchar *&bytes, size_t targetLength) override {
         node root = treeRoot;
-// #ifdef SZ3_PRINT_TIMINGS
-//         Timer timer(true);
-// #endif
         T* out = new T[targetLength];
-// #ifdef SZ3_PRINT_TIMINGS
-//         timer.stop("vector allocate time in decoding");
-// #endif
         size_t count = 0;
 
         // 先读出 bitstream 的长度（字节数）
@@ -291,29 +293,134 @@ class HuffmanEncoder : public concepts::EncoderInterface<T> {
             bytes += encodedLength;
             return out;
         }
-
         const uchar *p     = bytes;
         const uchar *p_end = bytes + encodedLength;
+        if (!usingTable) {
+            while (p < p_end && count < targetLength) {
+                unsigned char byte = *p++;   // 当前字节，LSB-first
 
-        while (p < p_end && count < targetLength) {
-            unsigned char byte = *p++;   // 当前字节，LSB-first
+                for (int b = 0; b < 8 && count < targetLength; ++b) {
+                    int bit = byte & 1u;
+                    byte >>= 1;
 
-            // 这个字节里最多有 8 个 bit 可用
-            for (int b = 0; b < 8 && count < targetLength; ++b) {
-                int bit = byte & 1u;
-                byte >>= 1;
+                    n = bit ? n->right : n->left;
 
-                n = bit ? n->right : n->left;
-
-                if (n->t) {
-                    out[count++] = n->c + offset;
-                    n = root;
+                    if (n->t) {
+                        out[count++] = n->c + offset;
+                        n = root;
+                    }
                 }
             }
+            bytes = p_end;
+            return out;
         }
+        else {
+        // while (p < p_end && count < targetLength) {
+        //     unsigned char byte = *p++;   // 当前字节，LSB-first
 
-        // 消费掉整个 bitstream
-        bytes = p_end;
+        //     for (int b = 0; b < 8 && count < targetLength; ++b) {
+        //         int bit = byte & 1u;
+        //         byte >>= 1;
+
+        //         n = bit ? n->right : n->left;
+
+        //         if (n->t) {
+        //             out[count++] = n->c + offset;
+        //             n = root;
+        //         }
+        //     }
+        // }
+            uint64_t bitbuf = 0;
+            int cur_len = 0;
+            const uint64_t L1_mask = (1u << L1) - 1;
+            const TableEntry* __restrict__ L1_ptr = L1_table.data();
+            // int lenCount[20] = {0};
+
+            bool valid_len1 = n->left->t;
+            int center = L1_ptr[0].symbol;
+
+            // auto refill = [&]() __attribute__((always_inline)) {
+            //     while (cur_len <= 56 && p < p_end)
+            //         bitbuf |= (static_cast<uint64_t>(*p++) << cur_len), cur_len += 8;
+            // };
+
+            
+            if (!valid_len1) {
+                while (count < targetLength) {
+                    if (cur_len < L1)
+                        while (cur_len <= 56 && p < p_end)
+                        bitbuf |= (static_cast<uint64_t>(*p++) << cur_len), cur_len += 8;
+                    const TableEntry& entry = L1_ptr[bitbuf & L1_mask];
+
+                    if (entry.is_leaf) {
+                        out[count++] = entry.symbol;
+                        bitbuf >>= entry.code_len;
+                        cur_len -= entry.code_len;
+                        // ++lenCount[entry.code_len];
+                        continue;
+                    }
+
+                    n = root;
+                    while (!n->t) {
+                        if (cur_len == 0)
+                            while (cur_len <= 56 && p < p_end)
+                                bitbuf |= (static_cast<uint64_t>(*p++) << cur_len), cur_len += 8;
+
+                        bool bit = bitbuf & 1;
+                        bitbuf >>= 1;
+                        --cur_len;
+
+                        n = bit ? n->right : n->left;
+                    }
+                
+                    out[count++] = n->c + offset;
+                }
+            }
+            else {
+                while (count < targetLength) {
+                    if (cur_len < L1)
+                        while (cur_len <= 56 && p < p_end)
+                            bitbuf |= (static_cast<uint64_t>(*p++) << cur_len), cur_len += 8;
+                    if(!(bitbuf & 1u)) {
+                        out[count++] = center;
+                        bitbuf >>= 1;
+                        cur_len -= 1;
+                        // ++lenCount[1];
+                        continue;
+                    }
+                    const TableEntry& entry = L1_ptr[bitbuf & L1_mask];
+
+                    if (entry.is_leaf) {
+                        out[count++] = entry.symbol;
+                        bitbuf >>= entry.code_len;
+                        cur_len -= entry.code_len;
+                        // ++lenCount[entry.code_len];
+                        continue;
+                    }
+
+                    n = root;
+                    while (!n->t) {
+                        if (cur_len == 0)
+                            while (cur_len <= 56 && p < p_end)
+                                bitbuf |= (static_cast<uint64_t>(*p++) << cur_len), cur_len += 8;
+
+                        bool bit = bitbuf & 1;
+                        bitbuf >>= 1;
+                        --cur_len;
+
+                        n = bit ? n->right : n->left;
+                    }
+                
+                    out[count++] = n->c + offset;
+                }
+            }
+            // for (int i = 0; i < 20; ++i) {
+            //     if (lenCount[i] > 0) {
+            //         std::cout << "lenCount[" << i << "] = " << lenCount[i] << " hit ratio: " << lenCount[i] / static_cast<double>(targetLength)<< std::endl;
+            //     }
+            // }
+            bytes = p_end;
+        }
         return out;
     }
     
@@ -461,7 +568,9 @@ class HuffmanEncoder : public concepts::EncoderInterface<T> {
     void load(const uchar *&c, size_t &remaining_length) override {
         // 读 offset
         read(offset, c, remaining_length);
-
+        usingTable = (offset >> 31) & 0x1u;
+        offset &= 0x7FFFFFFF;
+        // read(usingTable, c, remaining_length);
        // std::cout<<offset<<std::endl;
 
         // 读 stateNum
@@ -781,7 +890,7 @@ class HuffmanEncoder : public concepts::EncoderInterface<T> {
     
 
 
-    void buildCanonicalCode() {
+    void buildCanonicalCode(size_t* frequencies, size_t length) {
         if (!huffmanTree) return;
 
         const int n = static_cast<int>(huffmanTree->stateNum);
@@ -810,9 +919,11 @@ class HuffmanEncoder : public concepts::EncoderInterface<T> {
 
         // 3. 统计每个长度的数量 bl_count[L]
         std::vector<int> bl_count(maxLen + 1, 0);
+        std::vector<uint32_t> lengthFreqSum(maxLen + 1, 0);
         for (int s : symbols) {
             unsigned char L = huffmanTree->cout[s];
             ++bl_count[L];
+            lengthFreqSum[L] += frequencies[s + offset];
         }
 
         // 4. 计算各长度的第一个 canonical code（MSB-first）
@@ -824,15 +935,43 @@ class HuffmanEncoder : public concepts::EncoderInterface<T> {
             next_code[bits] = code;
         }
 
+        
+        size_t tableFreq = 0;
+        for (int i = 2; i <= maxLen && i <= L1; ++i) {
+            tableFreq += lengthFreqSum[i];
+        }
+
+        // for (int i = 1; i <= maxLen; ++i) {
+        //     std::cout << "lengthFreqSum[" << i << "] = " << lengthFreqSum[i] << '\n';
+        // }
+        if (length - tableFreq -  lengthFreqSum[1] >= tableFreq * 0.88 || static_cast<double>(lengthFreqSum[1]) / length >= 0.98) {
+            usingTable = false;
+        }
+        else {
+            usingTable = true;
+        }
+        // std::cout << "tableFreq = " << tableFreq << ", length = " << length << ", lengthFreqSum[1] = " << lengthFreqSum[1] << '\n';
+        // std::cout << "usingTable = " << usingTable << '\n';
+        // usingTable = 1;
+
         // 5. 为每个 symbol 分配 canonical 码字，并转为 LSB-first 存储
+        // auto reverse_len_bits = [](uint32_t c, int len) -> uint32_t {
+        //     uint32_t r = 0;
+        //     for (int i = 0; i < len; ++i) {
+        //         if ((c >> (len - 1 - i)) & 1u) {
+        //             r |= (1u << i);
+        //         }
+        //     }
+        //     return r;
+        // };
+
         auto reverse_len_bits = [](uint32_t c, int len) -> uint32_t {
-            uint32_t r = 0;
-            for (int i = 0; i < len; ++i) {
-                if ((c >> (len - 1 - i)) & 1u) {
-                    r |= (1u << i);
-                }
-            }
-            return r;
+            c = ((c & 0x55555555u) << 1) | ((c >> 1) & 0x55555555u);
+            c = ((c & 0x33333333u) << 2) | ((c >> 2) & 0x33333333u);
+            c = ((c & 0x0F0F0F0Fu) << 4) | ((c >> 4) & 0x0F0F0F0Fu);
+            c = ((c & 0x00FF00FFu) << 8) | ((c >> 8) & 0x00FF00FFu);
+            c = (c << 16) | (c >> 16);
+            return c >> (32 - len);
         };
 
         for (int s : symbols) {
@@ -936,7 +1075,7 @@ class HuffmanEncoder : public concepts::EncoderInterface<T> {
 
         build_code(huffmanTree->qq[1], 0ULL, 0);
         treeRoot = huffmanTree->qq[1];
-        buildCanonicalCode();
+        buildCanonicalCode(frenqencies, length);
 
     }
 
@@ -957,12 +1096,10 @@ class HuffmanEncoder : public concepts::EncoderInterface<T> {
                 break;
             }
 
+            
         }
         int stateNum = max - offset + 2;
-       // auto tid = omp_get_thread_num();
-       //  #pragma omp critical
-       // std::cout<<tid<<" statenum "<< stateNum<<std::endl;
-        //timer.stop("count");
+        //std::cout << "offset: " << offset << ", max: " << max << ", length: " << length << std::endl;
         huffmanTree = createHuffmanTree(stateNum);
         // to produce the same huffman three on linux & win, we need to iterate through ordered_map in a fixed order
         
@@ -984,7 +1121,7 @@ class HuffmanEncoder : public concepts::EncoderInterface<T> {
 
         build_code(huffmanTree->qq[1], 0ULL, 0);
         treeRoot = huffmanTree->qq[1];
-        buildCanonicalCode();
+        buildCanonicalCode(frequencies, length);
     }
     
     template <class T1>
@@ -1164,17 +1301,18 @@ class HuffmanEncoder : public concepts::EncoderInterface<T> {
         for (int bits = 1; bits <= maxLen; ++bits) {
             code = (code + bl_count[bits - 1]) << 1;
             next_code[bits] = code;
+            // std::cout << "length " << bits - 1<< " has " << bl_count[bits];
         }
-
+        // std::cout << std::endl;
         // 5. 工具：把 MSB-first 的 canonical 整数码反转成 LSB-first
+
         auto reverse_len_bits = [](uint32_t c, int len) -> uint32_t {
-            uint32_t r = 0;
-            for (int i = 0; i < len; ++i) {
-                if ((c >> (len - 1 - i)) & 1u) {
-                    r |= (1u << i);
-                }
-            }
-            return r;
+            c = ((c & 0x55555555u) << 1) | ((c >> 1) & 0x55555555u);
+            c = ((c & 0x33333333u) << 2) | ((c >> 2) & 0x33333333u);
+            c = ((c & 0x0F0F0F0Fu) << 4) | ((c >> 4) & 0x0F0F0F0Fu);
+            c = ((c & 0x00FF00FFu) << 8) | ((c >> 8) & 0x00FF00FFu);
+            c = (c << 16) | (c >> 16);
+            return c >> (32 - len);
         };
 
         // 6. 清空 node 池，构造根节点
@@ -1183,35 +1321,66 @@ class HuffmanEncoder : public concepts::EncoderInterface<T> {
         root->left  = nullptr;
         root->right = nullptr;
         treeRoot = root;
+        if(usingTable) {
+            L1_table.resize(1 << L1);
+            for (int s : symbols) {
+                int len = static_cast<int>(huffmanTree->cout[s]);
+                int msb_code = next_code[len]++;            // canonical MSB-first code
+                uint32_t lsb_code = reverse_len_bits(static_cast<uint32_t>(msb_code), len);
+                huffmanTree->code[s] = static_cast<uint64_t>(lsb_code);
 
-        // 7. 对每个 symbol，根据 LSB 码字逐 bit 插入树
-        for (int s : symbols) {
-            int len = static_cast<int>(huffmanTree->cout[s]);
-
-            int msb_code = next_code[len]++;            // canonical MSB-first code
-            uint32_t lsb_code = reverse_len_bits(static_cast<uint32_t>(msb_code), len);
-
-            // 如果你希望 encode 端也用这套 canonical LSB 码字，可以顺便写回 code 数组：
-            huffmanTree->code[s] = static_cast<uint64_t>(lsb_code);
-
-            node cur = root;
-            for (int b = 0; b < len; ++b) {
-                int bit = (lsb_code >> b) & 1;
-                node &child = bit ? cur->right : cur->left;
-                if (!child) {
-                    child = new_node2(0, 0);
-                    child->left  = nullptr;
-                    child->right = nullptr;
+                node cur = root;
+                for (int b = 0; b < len; ++b) {
+                    int bit = (lsb_code >> b) & 1;
+                    node &child = bit ? cur->right : cur->left;
+                    if (!child) {
+                        child = new_node2(0, 0);
+                        child->left  = nullptr;
+                        child->right = nullptr;
+                    }
+                    cur = child;
                 }
-                cur = child;
-            }
-            // 走完 len 个 bit，cur 即为叶子节点
-            cur->t = 1;
-            cur->c = static_cast<T>(s);
-        }
+                // 走完 len 个 bit，cur 即为叶子节点
+                cur->t = 1;
+                cur->c = static_cast<T>(s);
 
-        // 至此 treeRoot 就是一棵完整的 Huffman 树，
-        // decode 可以按 LSB-first 从 bitstream 里取 bit，并沿着 0/1 走树。
+
+                if (len <= L1) {
+                    // --len;
+                    // lsb_code >>= 1;
+                    int reps = 1 << (L1 - len);
+                    for (int r = 0; r < reps; ++r) {
+                        uint32_t idx = lsb_code | (static_cast<uint32_t>(r) << len);
+                        L1_table[idx] = {s + offset, len, true};
+                    }
+                }
+            }
+        }
+        else {
+            for (int s : symbols) {
+                int len = static_cast<int>(huffmanTree->cout[s]);
+                int msb_code = next_code[len]++;            // canonical MSB-first code
+                uint32_t lsb_code = reverse_len_bits(static_cast<uint32_t>(msb_code), len);
+                huffmanTree->code[s] = static_cast<uint64_t>(lsb_code);
+
+                node cur = root;
+                for (int b = 0; b < len; ++b) {
+                    int bit = (lsb_code >> b) & 1;
+                    node &child = bit ? cur->right : cur->left;
+                    if (!child) {
+                        child = new_node2(0, 0);
+                        child->left  = nullptr;
+                        child->right = nullptr;
+                    }
+                    cur = child;
+                }
+                // 走完 len 个 bit，cur 即为叶子节点
+                cur->t = 1;
+                cur->c = static_cast<T>(s);
+            }
+
+        }  
+
     }
 
 
