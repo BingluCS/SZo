@@ -987,7 +987,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg64 = svptrue_b64();
             for (; i + 1 < even_len; i += step) { // 3 is not AVX_256_parallelism - 1 !!
                 svfloat64_t va = svld1(pg64, &buf[i]);
                 svfloat64_t vb = svld1(pg64, &buf[i + 1]);
@@ -1082,8 +1082,8 @@ namespace SZ3 {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg = svptrue_b32();
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg = svptrue_b32();
+            const svbool_t pg64 = svptrue_b64();
             for (; i + 3  < even_len; i += step) { // 3 is not AVX_256_parallelism - 1 !!       
 
                 svfloat32_t va = svld1(pg, &buf[i]);
@@ -1165,7 +1165,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg64 = svptrue_b64();
             for (; i + 3 < even_len; i += step) { // 3 is not AVX_256_parallelism - 1 !!
 
                 svfloat64_t va = svld1(pg64, &buf[i]);
@@ -1272,8 +1272,8 @@ namespace SZ3 {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg = svptrue_b32();
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg = svptrue_b32();
+            const svbool_t pg64 = svptrue_b64();
             for (; i  < len; i += step) {
                 svfloat32_t va = svld1(pg, &a[i]);
                 svfloat32_t vb = svld1(pg, &b[i]);
@@ -1286,7 +1286,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat64_t va = svld1(pg64, &a[i]);
@@ -1307,8 +1307,8 @@ namespace SZ3 {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg = svptrue_b32();
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg = svptrue_b32();
+            const svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat32_t va = svld1(pg, &a[i]);
@@ -1330,7 +1330,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat64_t va = svld1(pg64, &a[i]);
@@ -1358,8 +1358,8 @@ namespace SZ3 {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg = svptrue_b32();
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg = svptrue_b32();
+            const svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat32_t sum = svld1(pg, &a[i]);                
@@ -1369,7 +1369,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat64_t sum = svld1(pg64, &a[i]);                
@@ -1386,8 +1386,8 @@ namespace SZ3 {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg = svptrue_b32();
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg = svptrue_b32();
+            const svbool_t pg64 = svptrue_b64();
             for (; i  < len; i += step) {
                 svfloat32_t va = svld1(pg, &a[i]);  
                 svfloat32_t vb = svld1(pg, &b[i]);
@@ -1399,7 +1399,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg64 = svptrue_b64();
             
             for (; i  < len; i += step) {
                 svfloat64_t va = svld1(pg64, &a[i]);  
@@ -1419,8 +1419,8 @@ namespace SZ3 {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg = svptrue_b32();
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg = svptrue_b32();
+            const svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat32_t vb = svld1(pg, &b[i]);
@@ -1435,7 +1435,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg64 = svptrue_b64();
             
             for (; i  < len; i += step) {
                 svfloat64_t vb = svld1(pg64, &b[i]);
@@ -1457,8 +1457,8 @@ namespace SZ3 {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg = svptrue_b32();
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg = svptrue_b32();
+            const svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat32_t va = svld1(pg, &a[i]);
@@ -1474,7 +1474,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            static const svbool_t pg64 = svptrue_b64();
+            const svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat64_t va = svld1(pg64, &a[i]);
