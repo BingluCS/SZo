@@ -1489,7 +1489,7 @@ namespace SZ3 {
     template <class T, uint N, class QuantizerOMP>
     template<typename U, typename>
     ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::quantize_1D_float (
-        svfloat32_t& sum, svfloat32_t& ori_sve, svfloat32_t& quant_sve, T* tmp, svbool_t& pg, svbool_t& pg64) {
+        svfloat32_t& sum, svfloat32_t& ori_sve, svfloat32_t& quant_sve, T* tmp, const svbool_t& pg, const svbool_t& pg64) {
             
             svfloat64_t quant_even_f64 = svcvt_f64_f32_x(pg64, quant_sve);
             svfloat64_t quant_odd_f64  = svcvtlt_f64_f32_x(pg64, quant_sve);
@@ -1537,7 +1537,7 @@ namespace SZ3 {
     template <class T, uint N, class QuantizerOMP>
     template<typename U, typename>
     ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::quantize_1D_double (
-        svfloat64_t& sum, svfloat64_t& ori_sve, svfloat64_t& quant_sve, T* tmp, svbool_t& pg64) {
+        svfloat64_t& sum, svfloat64_t& ori_sve, svfloat64_t& quant_sve, T* tmp, const svbool_t& pg64) {
             
         quant_sve = svrintn_f64_x(pg64, svmul_n_f64_x(pg64, quant_sve, real_ebx2_r));
 
@@ -1558,7 +1558,7 @@ namespace SZ3 {
     template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, typename U, typename>
     ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::quantize_float (svfloat32_t& sum, size_t& start, T*& data, size_t& offset, 
-        size_t& len, const size_t& step, svbool_t& pg, svbool_t& pg64, int tid) {
+        size_t& len, const size_t& step, const svbool_t& pg, const svbool_t& pg64, int tid) {
         if constexpr (CompMode == COMPMODE::COMP) {
             T ori[step];
             size_t base = start * offset;
@@ -1661,7 +1661,7 @@ namespace SZ3 {
     template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, typename U, typename>
     ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::quantize_double (svfloat64_t& sum, size_t& start, T*& data, size_t& offset, 
-        size_t& len, const size_t& step, svbool_t& pg64, int tid) {
+        size_t& len, const size_t& step, const svbool_t& pg64, int tid) {
         if constexpr (CompMode == COMPMODE::COMP) {
             T ori[step];
             size_t base = start * offset;
