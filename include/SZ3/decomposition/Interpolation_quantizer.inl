@@ -907,8 +907,8 @@ namespace SZ3 {
         if constexpr (std::is_same_v<T, float>) {
             // const size_t step = AVX_256_parallelism;
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg = svptrue_b32();
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
             for (; i + 1  < even_len; i += step) { // 3 is not AVX_256_parallelism - 1 !!
                 // predict
                 // svbool_t pg = svwhilelt_b32(i, even_len - 1);
@@ -987,7 +987,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg64 = svptrue_b64();
             for (; i + 1 < even_len; i += step) { // 3 is not AVX_256_parallelism - 1 !!
                 svfloat64_t va = svld1(pg64, &buf[i]);
                 svfloat64_t vb = svld1(pg64, &buf[i + 1]);
@@ -1082,8 +1082,8 @@ namespace SZ3 {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg = svptrue_b32();
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
             for (; i + 3  < even_len; i += step) { // 3 is not AVX_256_parallelism - 1 !!       
 
                 svfloat32_t va = svld1(pg, &buf[i]);
@@ -1165,7 +1165,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg64 = svptrue_b64();
             for (; i + 3 < even_len; i += step) { // 3 is not AVX_256_parallelism - 1 !!
 
                 svfloat64_t va = svld1(pg64, &buf[i]);
@@ -1272,8 +1272,8 @@ namespace SZ3 {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg = svptrue_b32();
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
             for (; i  < len; i += step) {
                 svfloat32_t va = svld1(pg, &a[i]);
                 svfloat32_t vb = svld1(pg, &b[i]);
@@ -1286,7 +1286,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat64_t va = svld1(pg64, &a[i]);
@@ -1307,8 +1307,8 @@ namespace SZ3 {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg = svptrue_b32();
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat32_t va = svld1(pg, &a[i]);
@@ -1330,7 +1330,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat64_t va = svld1(pg64, &a[i]);
@@ -1358,8 +1358,8 @@ namespace SZ3 {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg = svptrue_b32();
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat32_t sum = svld1(pg, &a[i]);                
@@ -1369,7 +1369,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat64_t sum = svld1(pg64, &a[i]);                
@@ -1386,8 +1386,8 @@ namespace SZ3 {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg = svptrue_b32();
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
             for (; i  < len; i += step) {
                 svfloat32_t va = svld1(pg, &a[i]);  
                 svfloat32_t vb = svld1(pg, &b[i]);
@@ -1399,7 +1399,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg64 = svptrue_b64();
             
             for (; i  < len; i += step) {
                 svfloat64_t va = svld1(pg64, &a[i]);  
@@ -1419,8 +1419,8 @@ namespace SZ3 {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg = svptrue_b32();
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat32_t vb = svld1(pg, &b[i]);
@@ -1435,7 +1435,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg64 = svptrue_b64();
             
             for (; i  < len; i += step) {
                 svfloat64_t vb = svld1(pg64, &b[i]);
@@ -1457,8 +1457,8 @@ namespace SZ3 {
         size_t i = 0;
         if constexpr (std::is_same_v<T, float>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg = svptrue_b32();
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat32_t va = svld1(pg, &a[i]);
@@ -1474,7 +1474,7 @@ namespace SZ3 {
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
-            const svbool_t pg64 = svptrue_b64();
+            svbool_t pg64 = svptrue_b64();
 
             for (; i  < len; i += step) {
                 svfloat64_t va = svld1(pg64, &a[i]);
@@ -1494,7 +1494,7 @@ namespace SZ3 {
     template <TUNING Tuning, class T, uint N, class Quantizer>
     template<typename U, typename>
     ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::quantize_1D_float (
-        svfloat32_t& sum, svfloat32_t& ori_sve, svfloat32_t& quant_sve, T* tmp, const svbool_t& pg, const svbool_t& pg64) {
+        svfloat32_t& sum, svfloat32_t& ori_sve, svfloat32_t& quant_sve, T* tmp, svbool_t& pg, svbool_t& pg64) {
             
             svfloat64_t quant_even_f64 = svcvt_f64_f32_x(pg64, quant_sve);
             svfloat64_t quant_odd_f64  = svcvtlt_f64_f32_x(pg64, quant_sve);
@@ -1542,7 +1542,7 @@ namespace SZ3 {
     template <TUNING Tuning, class T, uint N, class Quantizer>
     template<typename U, typename>
     ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::quantize_1D_double (
-        svfloat64_t& sum, svfloat64_t& ori_sve, svfloat64_t& quant_sve, T* tmp, const svbool_t& pg64) {
+        svfloat64_t& sum, svfloat64_t& ori_sve, svfloat64_t& quant_sve, T* tmp, svbool_t& pg64) {
             
         quant_sve = svrintn_f64_x(pg64, svmul_n_f64_x(pg64, quant_sve, real_ebx2_r));
 
@@ -1563,7 +1563,7 @@ namespace SZ3 {
     template <TUNING Tuning, class T, uint N, class Quantizer>
     template <COMPMODE CompMode, typename U, typename>
     ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::quantize_float (svfloat32_t& sum, size_t& start, T*& data, size_t& offset, 
-        size_t& len, const size_t& step, const svbool_t& pg, const svbool_t& pg64) {
+        size_t& len, const size_t& step, svbool_t& pg, svbool_t& pg64) {
         if constexpr (CompMode == COMPMODE::COMP) {
             T ori[step];
             size_t base = start * offset;
@@ -1666,7 +1666,7 @@ namespace SZ3 {
     template <TUNING Tuning, class T, uint N, class Quantizer>
     template <COMPMODE CompMode, typename U, typename>
     ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::quantize_double (svfloat64_t& sum, size_t& start, T*& data, size_t& offset, 
-        size_t& len, const size_t& step, const svbool_t& pg64) {
+        size_t& len, const size_t& step, svbool_t& pg64) {
         if constexpr (CompMode == COMPMODE::COMP) {
             T ori[step];
             size_t base = start * offset;

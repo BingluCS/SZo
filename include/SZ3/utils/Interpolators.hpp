@@ -111,17 +111,5 @@ ALWAYS_INLINE T interp_pchip(T a, T b, T c, T d) {
     return pchip;
 }
 
-// ALWAYS_INLINE __m256 interp_linear_avx_f(const __m256& va, __m256& vb, __m256& factor) {
-//     return _mm256_mul_ps(_mm256_add_ps(va, vb), factor); 
-// }
-
-// ALWAYS_INLINE __m256 interp_linear1_avx_f(const __m256& va, __m256& vb, __m256& factor) {
-//     return _mm256_mul_ps(_mm256_add_ps(va, vb), factor); 
-// }
-
-// ALWAYS_INLINE __m256 interp_equal_avx_f(const __m256& va) {
-//     return va;
-// }
-
 }  // namespace SZ3
 #endif  // SZ_INTERPOLATORS_HPP
