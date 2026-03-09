@@ -1363,9 +1363,8 @@ namespace SZ3 {
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
-            const size_t step = SVE2_parallelism;
-            svbool_t pg64 = svptrue_b64();
-
+            static const size_t step = SVE2_parallelism;
+            const svbool_t pg64 = svptrue_b64();
             for (; i  < len; i += step) {
                 svfloat64_t sum = svld1(pg64, &a[i]);                
                 quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
