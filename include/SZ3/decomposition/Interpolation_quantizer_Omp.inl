@@ -973,7 +973,7 @@ namespace SZ3 {
                         if (quant_vals[j] != 0) 
                             data[(start + (j << 1)) * offset] = tmp[j];
                         else 
-                            data[(start + (j << 1)) * offset] = quantizer.recover_unpred();
+                            data[(start + (j << 1)) * offset] = quantizer.recover_unpred2(tid);
                     }
                     local_quant_index[tid].value  += j;
                 }
@@ -1016,7 +1016,7 @@ namespace SZ3 {
                         if (quant_vals[j] != 0)
                             data[(start + (j << 1)) * offset] = tmp[j];
                         else
-                            quantizer.force_save_unpred(ori[j]);
+                            quantizer.save_unpred2(ori[j], tid);
                         ++frequencyList[tid][quant_vals[j]];
                     }
                     svst1w_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
@@ -1037,7 +1037,7 @@ namespace SZ3 {
                         if (quant_vals[j] != 0) 
                             data[(start + (j << 1)) * offset] = tmp[j];
                         else
-                            data[(start + (j << 1)) * offset] = quantizer.recover_unpred();
+                            data[(start + (j << 1)) * offset] = quantizer.recover_unpred2(tid);
                     }
                     local_quant_index[tid].value += j;  
                 }
@@ -1120,7 +1120,7 @@ namespace SZ3 {
                         if (quant_vals[j] != 0)
                             data[(start + (j << 1)) * offset] = tmp[j];
                         else
-                            quantizer.force_save_unpred(ori[j]);
+                            quantizer.save_unpred2(ori[j], tid);
                         ++frequencyList[tid][quant_vals[j]];
                     }
                     svst1(pg, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
@@ -1151,7 +1151,7 @@ namespace SZ3 {
                         if (quant_vals[j] != 0) 
                             data[(start + (j << 1)) * offset] = tmp[j];
                         else 
-                            data[(start + (j << 1)) * offset] = quantizer.recover_unpred();
+                            data[(start + (j << 1)) * offset] = quantizer.recover_unpred2(tid);
                     }
                     local_quant_index[tid].value += j;
                 }
@@ -1201,7 +1201,7 @@ namespace SZ3 {
                         if (quant_vals[j] != 0)
                             data[(start + (j << 1)) * offset] = tmp[j];
                         else
-                            quantizer.force_save_unpred(ori[j]);
+                            quantizer.save_unpred2(ori[j], tid);
                         ++frequencyList[tid][quant_vals[j]];
                     }
                     svst1w_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
@@ -1222,7 +1222,7 @@ namespace SZ3 {
                         if (quant_vals[j] != 0) 
                             data[(start + (j << 1)) * offset] = tmp[j];
                         else
-                            data[(start + (j << 1)) * offset] = quantizer.recover_unpred();
+                            data[(start + (j << 1)) * offset] = quantizer.recover_unpred2(tid);
                     }
                     local_quant_index[tid].value += j;  
                 }
@@ -1619,7 +1619,7 @@ namespace SZ3 {
                 if (quant_vals[j] != 0) 
                     data[(start + j) * offset] = tmp[j];
                 else
-                    quantizer.force_save_unpred(ori[j]);
+                    quantizer.save_unpred2(ori[j], tid);
                 ++frequencyList[tid][quant_vals[j]];
             }
 
@@ -1652,7 +1652,7 @@ namespace SZ3 {
                 if (quant_vals[j] != 0) 
                     data[(start + j) * offset] = tmp[j];
                 else 
-                    data[(start + j) * offset] = quantizer.recover_unpred();
+                    data[(start + j) * offset] = quantizer.recover_unpred2(tid);
             }
             local_quant_index[tid].value += j;
         }
@@ -1702,7 +1702,7 @@ namespace SZ3 {
                 if (quant_vals[j] != 0)
                     data[(start + j) * offset] = tmp[j];
                 else
-                    quantizer.force_save_unpred(ori[j]);
+                    quantizer.save_unpred2(ori[j], tid);
                 ++frequencyList[tid][quant_vals[j]];
             }
             svst1w_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
@@ -1723,7 +1723,7 @@ namespace SZ3 {
                 if (quant_vals[j] != 0) 
                     data[(start + j) * offset] = tmp[j];
                 else
-                    data[(start + j) * offset] = quantizer.recover_unpred();
+                    data[(start + j) * offset] = quantizer.recover_unpred2(tid);
             }
             local_quant_index[tid].value += j;  
         }
