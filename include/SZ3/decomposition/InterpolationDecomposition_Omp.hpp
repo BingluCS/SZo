@@ -55,7 +55,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         //std::cout<<"used threads: "<<nThreads<<std::endl;
 
 #ifdef __ARM_FEATURE_SVE2
-        auto buffer_len = max_dim +  2 * SVE2_parallelism - max_dim % SVE2_parallelism;
+        buffer_len = max_dim +  2 * SVE2_parallelism - max_dim % SVE2_parallelism;
 #else
         buffer_len =  (max_dim + 2 * AVX_256_parallelism - max_dim % AVX_256_parallelism);
 #endif
@@ -186,7 +186,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
 
         nThreads = omp_get_max_threads(); // for safety
 #ifdef __ARM_FEATURE_SVE2
-        auto buffer_len = max_dim +  2 * SVE2_parallelism - max_dim % SVE2_parallelism;
+        buffer_len = max_dim +  2 * SVE2_parallelism - max_dim % SVE2_parallelism;
 #else
         buffer_len =  (max_dim + 2 * AVX_256_parallelism - max_dim % AVX_256_parallelism) ; // 32 / sizeof(T);
 #endif

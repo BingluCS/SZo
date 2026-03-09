@@ -39,7 +39,7 @@ size_t SZ_compress_Interp(Config &conf, T *data, uchar *cmpData, size_t cmpCap) 
 #endif
     #ifdef _OPENMP
     int threads = omp_get_max_threads();
-    if (threads > 1 || true) {
+    if (threads > 1) {
         auto sz = make_compressor_sz_generic_omp<T, N>(
         make_decomposition_interpolation_omp<T, N>(conf, LinearQuantizerOMP<T>(conf.absErrorBound, conf.quantbinCnt / 2)),
         HuffmanEncoder<int>(),  Lossless_zstd());
@@ -66,7 +66,7 @@ void SZ_decompress_Interp(const Config &conf, const uchar *cmpData, size_t cmpSi
    // std::cout<<"decomp started"<<std::endl;
     #ifdef _OPENMP
     int threads = omp_get_max_threads();
-    if (threads > 1 || true) {
+    if (threads > 1) {
     auto sz = make_compressor_sz_generic_omp<T, N>(
         make_decomposition_interpolation_omp<T, N>(conf, LinearQuantizerOMP<T>(conf.absErrorBound, conf.quantbinCnt / 2)),
         HuffmanEncoder<int>(), Lossless_zstd());

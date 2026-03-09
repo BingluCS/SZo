@@ -969,7 +969,7 @@ namespace SZ3 {
                     svst1_f32(pg, tmp, decompressed);
                     
                     size_t j = 0;
-                    for ( ; j < step && i + j + 1< odd_len; ++j) {
+                    for ( ; j < step && i + j + 1 < odd_len; ++j) {
                         if (quant_vals[j] != 0) 
                             data[(start + (j << 1)) * offset] = tmp[j];
                         else 
@@ -1053,11 +1053,10 @@ namespace SZ3 {
         quantize_func(cur_ij_offset + last * offset , data[last * offset], pred_edge, tid);
     }
 
-
     template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, class QuantizeFunc>
     ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_cubic_and_quantize_1D(const T * buf, const size_t &len, T* data, 
-        size_t&  offset, size_t& cur_ij_offset, int& tid, QuantizeFunc &&quantize_func) {
+        size_t&  offset, size_t& cur_ij_offset, int& tid,  QuantizeFunc &&quantize_func) {
        // assert(len <= max_dim);
         if(len == 1)
             return;
@@ -1075,9 +1074,160 @@ namespace SZ3 {
         quantize_func(cur_ij_offset + offset , data[offset], pred_first, tid);
 
         size_t i = 0;
-        for (; i + 3  < even_len; ++i) {
-            size_t start = ((i << 1) + 3) * offset;
-            quantize_func(cur_ij_offset + start,  data[start], interp_cubic(buf[i], buf[i + 1], buf[i + 2], buf[i + 3]), tid);
+        if constexpr (std::is_same_v<T, float>) {
+            const size_t step = SVE2_parallelism;
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
+            for (; i + 3  < even_len; i += step) { // 3 is not AVX_256_parallelism - 1 !!       
+
+                svfloat32_t va = svld1(pg, &buf[i]);
+                svfloat32_t vb = svld1(pg, &buf[i + 1]);
+                svfloat32_t vc = svld1(pg, &buf[i + 2]);
+                
+                svfloat32_t sum = svadd_f32_x(pg, vb, vc);
+                sum = svmul_n_f32_x(pg, sum, 9.0f);
+
+                svfloat32_t vd = svld1(pg, &buf[i + 3]);
+                sum = svsub_f32_x(pg, sum, va);
+                sum = svsub_f32_x(pg, sum, vd);
+                sum = svmul_n_f32_x(pg, sum, 0.0625f);
+
+                size_t start = (i << 1) + 3;
+
+                if constexpr (CompMode == COMPMODE::COMP) {
+                     T ori[step];
+                    size_t base = start * offset;
+                    size_t offsetx2 = offset << 1;
+
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) {
+                        ori[j] = data[base + j * offsetx2];
+                    }
+
+                    svfloat32_t ori_sve = svld1(pg, ori);
+                    svfloat32_t quant_sve = svsub_f32_x(pg, ori_sve, sum); // prediction error
+                    T tmp[step];
+                    int quant_vals[step];
+
+                    quantize_1D_float (sum, ori_sve, quant_sve, tmp, pg, pg64);
+
+                    svint32_t quant_sve_i = svcvt_s32_f32_z(pg, quant_sve);
+                    svst1(pg, quant_vals, quant_sve_i);
+
+                    size_t j = 0;
+                    #pragma unroll
+                    for ( ; j < step && i + j + 3 < odd_len; ++j) {
+                        if (quant_vals[j] != 0)
+                            data[(start + (j << 1)) * offset] = tmp[j];
+                        else
+                            quantizer.save_unpred2(ori[j], tid);
+                        ++frequencyList[tid][quant_vals[j]];
+                    }
+                    svst1(pg, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
+                    local_quant_index[tid].value += j;
+                }
+                else if constexpr (CompMode == COMPMODE::DECOMP) { // decomp
+                    svint32_t quant_sve_i = svld1_s32(pg, local_quant_inds[tid] + local_quant_index[tid].value);
+                    int quant_vals[step];
+                    svst1(pg, quant_vals, quant_sve_i);
+                    quant_sve_i = svsub_n_s32_x(pg, quant_sve_i, radius);
+                    
+                    svfloat64_t decompressed_even_f64 = svcvt_f64_s32_x(pg64, quant_sve_i);
+                    svfloat64_t decompressed_odd_f64  = svcvtlt_f64_f32_x(pg64, svcvt_f32_s32_x(pg, quant_sve_i));
+                    
+                    decompressed_even_f64 = svmul_n_f64_x(pg64, decompressed_even_f64, real_ebx2);
+                    decompressed_odd_f64 = svmul_n_f64_x(pg64, decompressed_odd_f64, real_ebx2);
+                    
+                    svfloat32_t decompressed = svcvt_f32_f64_x(pg64, decompressed_even_f64);
+                    decompressed = svcvtnt_f32_f64_x(decompressed, pg64, decompressed_odd_f64);
+                    
+                    decompressed = svadd_f32_x(pg, decompressed, sum);
+
+                    T tmp[step];
+                    svst1_f32(pg, tmp, decompressed);
+                    
+                    size_t j = 0;
+                    for ( ; j < step && i + j + 3 < odd_len; ++j) {
+                        if (quant_vals[j] != 0) 
+                            data[(start + (j << 1)) * offset] = tmp[j];
+                        else 
+                            data[(start + (j << 1)) * offset] = quantizer.recover_unpred2(tid);
+                    }
+                    local_quant_index[tid].value += j;
+                }
+            }
+        }
+        else if constexpr (std::is_same_v<T, double>) {
+            const size_t step = SVE2_parallelism;
+            svbool_t pg64 = svptrue_b64();
+            for (; i + 3 < even_len; i += step) { // 3 is not AVX_256_parallelism - 1 !!
+
+                svfloat64_t va = svld1(pg64, &buf[i]);
+                svfloat64_t vb = svld1(pg64, &buf[i + 1]);
+                svfloat64_t vc = svld1(pg64, &buf[i + 2]);
+                
+                svfloat64_t sum = svadd_f64_x(pg64, vb, vc);
+                sum = svmul_n_f64_x(pg64, sum, 9.0);
+
+                svfloat64_t vd = svld1(pg64, &buf[i + 3]);
+                sum = svsub_f64_x(pg64, sum, va);
+                sum = svsub_f64_x(pg64, sum, vd);
+                sum = svmul_n_f64_x(pg64, sum, 0.0625);
+
+                size_t start = (i << 1) + 3;
+                if constexpr (CompMode == COMPMODE::COMP) {
+                    T ori[step];
+                    size_t base = start * offset;
+                    size_t offsetx2 = offset << 1;
+
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) {
+                        ori[j] = data[base + j * offsetx2];
+                    }
+
+                    svfloat64_t ori_sve = svld1(pg64, ori);
+                    svfloat64_t quant_sve = svsub_f64_x(pg64, ori_sve, sum); // prediction error
+                    T tmp[step];
+                    int quant_vals[step];
+                    quantize_1D_double(sum, ori_sve, quant_sve, tmp, pg64);
+                    
+                    svint64_t quant_sve_i = svcvt_s64_f64_x(pg64, quant_sve);
+                    
+                    svst1w_s64(pg64, quant_vals, quant_sve_i);
+
+                    size_t j = 0;
+                    #pragma unroll
+                    for ( ; j < step && i + j + 3 < odd_len; ++j) {
+                        if (quant_vals[j] != 0)
+                            data[(start + (j << 1)) * offset] = tmp[j];
+                        else
+                            quantizer.save_unpred2(ori[j], tid);
+                        ++frequencyList[tid][quant_vals[j]];
+                    }
+                    svst1w_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
+                    local_quant_index[tid].value += j;
+                }
+                else if constexpr (CompMode == COMPMODE::DECOMP) { // decomp
+                    svint64_t quant_sve_i = svld1sw_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value);
+                    int quant_vals[step];
+                    svst1w_s64(pg64, quant_vals, quant_sve_i);
+                    quant_sve_i = svsub_n_s64_x(pg64, quant_sve_i, radius);
+
+                    svfloat64_t decompressed = svmla_f64_x(pg64, sum, 
+                            svcvt_f64_s64_x(pg64, quant_sve_i), svdup_f64(real_ebx2));
+                    T tmp[step];
+                    svst1_f64(pg64, tmp, decompressed);
+                    size_t j = 0;
+                    for ( ; j < step && i + j + 3 < odd_len; ++j) {
+                        if (quant_vals[j] != 0) 
+                            data[(start + (j << 1)) * offset] = tmp[j];
+                        else
+                            data[(start + (j << 1)) * offset] = quantizer.recover_unpred2(tid);
+                    }
+                    local_quant_index[tid].value += j;  
+                }
+
+            }
         }
         
         if(odd_len > 1){
@@ -1102,6 +1252,8 @@ namespace SZ3 {
                     edge_pred = interp_linear1(buf[even_len - 2], buf[even_len - 1]);
                     int last = 2 * odd_len - 1;
                     quantize_func(cur_ij_offset + last * offset, data[last * offset], edge_pred, tid);
+                
+
             }
         }
     }
@@ -1110,12 +1262,35 @@ namespace SZ3 {
     template <COMPMODE CompMode, class QuantizeFunc>
     ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_linear_and_quantize(const T * a, const T* b, size_t &len, T* data, 
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
+        
         size_t i = 0;
-        for (; i < len; ++i) {
-            size_t start = i * offset;
-            quantize_func(cur_ij_offset + start,  data[start], interp_linear(a[i], b[i]), tid);
-        }
+        if constexpr (std::is_same_v<T, float>) {
+            const size_t step = SVE2_parallelism;
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
+            for (; i  < len; i += step) {
+                svfloat32_t va = svld1(pg, &a[i]);
+                svfloat32_t vb = svld1(pg, &b[i]);
 
+                svfloat32_t sum = svadd_f32_x(pg, va, vb);
+                sum = svmul_n_f32_x(pg, sum, 0.5f);   
+                
+                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
+            }
+        }
+        else if constexpr (std::is_same_v<T, double>) {
+            const size_t step = SVE2_parallelism;
+            svbool_t pg64 = svptrue_b64();
+
+            for (; i  < len; i += step) {
+                svfloat64_t va = svld1(pg64, &a[i]);
+                svfloat64_t vb = svld1(pg64, &b[i]);
+
+                svfloat64_t sum = svadd_f64_x(pg64, va, vb);
+                sum = svmul_n_f64_x(pg64, sum, 0.5);
+                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
+            }
+        }
     }
 
     template <class T, uint N, class QuantizerOMP>
@@ -1124,9 +1299,49 @@ namespace SZ3 {
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
 
         size_t i = 0;
-        for (; i < len; ++i) {
-            size_t start = i * offset;
-            quantize_func(cur_ij_offset + start,  data[start], interp_cubic(a[i], b[i], c[i], d[i]), tid);
+        if constexpr (std::is_same_v<T, float>) {
+            const size_t step = SVE2_parallelism;
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
+
+            for (; i  < len; i += step) {
+                svfloat32_t va = svld1(pg, &a[i]);
+                svfloat32_t vb = svld1(pg, &b[i]);
+                svfloat32_t vc = svld1(pg, &c[i]);
+                
+                svfloat32_t sum = svadd_f32_x(pg, vb, vc);
+                sum = svmul_n_f32_x(pg, sum, 9.0f);
+
+                svfloat32_t vd = svld1(pg, &d[i]);
+                
+                sum = svsub_f32_x(pg, sum, va);
+                sum = svsub_f32_x(pg, sum, vd);
+                sum = svmul_n_f32_x(pg, sum, 0.0625f);
+                
+                // _mm256_storeu_ps(p + i, sum);
+                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
+            }
+        }
+        else if constexpr (std::is_same_v<T, double>) {
+            const size_t step = SVE2_parallelism;
+            svbool_t pg64 = svptrue_b64();
+
+            for (; i  < len; i += step) {
+                svfloat64_t va = svld1(pg64, &a[i]);
+                svfloat64_t vb = svld1(pg64, &b[i]);
+                svfloat64_t vc = svld1(pg64, &c[i]);
+                
+                svfloat64_t sum = svadd_f64_x(pg64, vb, vc);
+                sum = svmul_n_f64_x(pg64, sum, 9.0);
+
+                svfloat64_t vd = svld1(pg64, &d[i]);
+                
+                sum = svsub_f64_x(pg64, sum, va);
+                sum = svsub_f64_x(pg64, sum, vd);
+                sum = svmul_n_f64_x(pg64, sum, 0.0625);
+
+                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
+            }
         }
     }
     
@@ -1135,9 +1350,25 @@ namespace SZ3 {
     ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_equal_and_quantize(const T * a, size_t &len, T* data, 
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
         size_t i = 0;
-        for (; i < len; ++i) {
-            size_t start = i * offset;
-            quantize_func(cur_ij_offset + start,  data[start], a[i], tid);
+        if constexpr (std::is_same_v<T, float>) {
+            const size_t step = SVE2_parallelism;
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
+
+            for (; i  < len; i += step) {
+                svfloat32_t sum = svld1(pg, &a[i]);                
+                // _mm256_storeu_ps(p + i, sum);
+                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
+            }
+        }
+        else if constexpr (std::is_same_v<T, double>) {
+            const size_t step = SVE2_parallelism;
+            svbool_t pg64 = svptrue_b64();
+
+            for (; i  < len; i += step) {
+                svfloat64_t sum = svld1(pg64, &a[i]);                
+                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
+            }
         }
     }
 
@@ -1145,10 +1376,32 @@ namespace SZ3 {
     template <COMPMODE CompMode, class QuantizeFunc>
     ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_linear1_and_quantize(const T * a, const T* b, size_t &len, T* data, 
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
+  
         size_t i = 0;
-        for (; i < len; ++i) {
-            size_t start = i * offset;
-            quantize_func(cur_ij_offset + start,  data[start], interp_linear1(a[i], b[i]), tid);
+        if constexpr (std::is_same_v<T, float>) {
+            const size_t step = SVE2_parallelism;
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
+            for (; i  < len; i += step) {
+                svfloat32_t va = svld1(pg, &a[i]);  
+                svfloat32_t vb = svld1(pg, &b[i]);
+                vb = svmul_n_f32_x(pg, vb, 1.5f);
+                svfloat32_t sum = svmls_n_f32_x(pg, vb, va, 0.5f);
+                // _mm256_storeu_ps(p + i, sum);
+                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
+            }
+        }
+        else if constexpr (std::is_same_v<T, double>) {
+            const size_t step = SVE2_parallelism;
+            svbool_t pg64 = svptrue_b64();
+            
+            for (; i  < len; i += step) {
+                svfloat64_t va = svld1(pg64, &a[i]);  
+                svfloat64_t vb = svld1(pg64, &b[i]);
+                vb = svmul_n_f64_x(pg64, vb, 1.5);
+                svfloat64_t sum = svmls_n_f64_x(pg64, vb, va, 0.5);
+                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
+            }
         }
     }
 
@@ -1156,458 +1409,82 @@ namespace SZ3 {
     template <COMPMODE CompMode, class QuantizeFunc>
     ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_quad1_and_quantize(const T * a, const T* b, const T* c, size_t &len, T* data, 
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
+
         size_t i = 0;
-        for (; i < len; ++i) {
-            size_t start = i * offset;
-            quantize_func(cur_ij_offset + start,  data[start], interp_quad_1(a[i], b[i], c[i]), tid);
+        if constexpr (std::is_same_v<T, float>) {
+            const size_t step = SVE2_parallelism;
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
+
+            for (; i  < len; i += step) {
+                svfloat32_t vb = svld1(pg, &b[i]);
+                svfloat32_t vc = svld1(pg, &c[i]);
+                vb = svnmls_n_f32_x(pg, vc, vb, 6.0f);
+                svfloat32_t va = svld1(pg, &a[i]);  
+                svfloat32_t sum = svmla_n_f32_x(pg, vb, va, 3.0f);
+                sum = svmul_n_f32_x(pg, sum, 0.125f);
+                // _mm256_storeu_ps(p + i, sum);
+                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
+            }
         }
-      
+        else if constexpr (std::is_same_v<T, double>) {
+            const size_t step = SVE2_parallelism;
+            svbool_t pg64 = svptrue_b64();
+            
+            for (; i  < len; i += step) {
+                svfloat64_t vb = svld1(pg64, &b[i]);
+                svfloat64_t vc = svld1(pg64, &c[i]);
+                vb = svnmls_n_f64_x(pg64, vc, vb, 6.0);
+                svfloat64_t va = svld1(pg64, &a[i]);  
+                svfloat64_t sum = svmla_n_f64_x(pg64, vb, va, 3.0);
+                sum = svmul_n_f64_x(pg64, sum, 0.125);
+                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
+            }
+
+        }      
     }
 
     template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_quad2_and_quantize(const T * a, const T* b, const T* c, size_t &len, T* data, 
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_quad2_and_quantize (const T * a, const T* b, const T* c, size_t &len, T* data, 
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
         size_t i = 0;
-        for (; i < len; ++i) {
-            size_t start = i * offset;
-            quantize_func(cur_ij_offset + start,  data[start], interp_quad_2(a[i], b[i], c[i]), tid);
+        if constexpr (std::is_same_v<T, float>) {
+            const size_t step = SVE2_parallelism;
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
+
+            for (; i  < len; i += step) {
+                svfloat32_t va = svld1(pg, &a[i]);
+                svfloat32_t vb = svld1(pg, &b[i]);
+                vb = svnmls_n_f32_x(pg, va, vb, 6.0f);
+
+                svfloat32_t vc = svld1(pg, &c[i]);
+                svfloat32_t sum = svmla_n_f32_x(pg, vb, vc, 3.0f);
+                sum = svmul_n_f32_x(pg, sum, 0.125f);
+                // _mm256_storeu_ps(p + i, sum);
+                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
+            }
         }
+        else if constexpr (std::is_same_v<T, double>) {
+
+            const size_t step = SVE2_parallelism;
+            svbool_t pg64 = svptrue_b64();
+
+            for (; i  < len; i += step) {
+                svfloat64_t va = svld1(pg64, &a[i]);
+                svfloat64_t vb = svld1(pg64, &b[i]);
+                vb = svnmls_n_f64_x(pg64, va, vb, 6.0);
+
+                svfloat64_t vc = svld1(pg64, &c[i]);
+                svfloat64_t sum = svmla_n_f64_x(pg64, vb, vc, 3.0);
+                sum = svmul_n_f64_x(pg64, sum, 0.125);
+                // _mm256_storeu_ps(p + i, sum);
+                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
+            }
+        }   
       
     }
-
-    // template <class T, uint N, class QuantizerOMP>
-    // template <COMPMODE CompMode, class QuantizeFunc>
-    // ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_cubic_and_quantize_1D(const T * buf, const size_t &len, T* data, 
-    //     size_t&  offset, size_t& cur_ij_offset, int& tid,  QuantizeFunc &&quantize_func) {
-    //    // assert(len <= max_dim);
-    //     if(len == 1)
-    //         return;
-
-    //     auto odd_len = len / 2;
-    //     auto even_len = len - odd_len;
-        
-    //     T pred_first; 
-    //     if(even_len < 2)
-    //         pred_first = (buf[0]);
-    //     else if(even_len < 3)
-    //         pred_first = interp_linear(buf[0], buf[1]);
-    //     else 
-    //         pred_first = interp_quad_1(buf[0], buf[1], buf[2]);
-    //     quantize_func(cur_ij_offset + offset , data[offset], pred_first, tid);
-
-    //     size_t i = 0;
-    //     if constexpr (std::is_same_v<T, float>) {
-    //         const size_t step = SVE2_parallelism;
-    //         svbool_t pg = svptrue_b32();
-    //         svbool_t pg64 = svptrue_b64();
-    //         for (; i + 3  < even_len; i += step) { // 3 is not AVX_256_parallelism - 1 !!       
-
-    //             svfloat32_t va = svld1(pg, &buf[i]);
-    //             svfloat32_t vb = svld1(pg, &buf[i + 1]);
-    //             svfloat32_t vc = svld1(pg, &buf[i + 2]);
-                
-    //             svfloat32_t sum = svadd_f32_x(pg, vb, vc);
-    //             sum = svmul_n_f32_x(pg, sum, 9.0f);
-
-    //             svfloat32_t vd = svld1(pg, &buf[i + 3]);
-    //             sum = svsub_f32_x(pg, sum, va);
-    //             sum = svsub_f32_x(pg, sum, vd);
-    //             sum = svmul_n_f32_x(pg, sum, 0.0625f);
-
-    //             size_t start = (i << 1) + 3;
-
-    //             if constexpr (CompMode == COMPMODE::COMP) {
-    //                  T ori[step];
-    //                 size_t base = start * offset;
-    //                 size_t offsetx2 = offset << 1;
-
-    //                 #pragma unroll
-    //                 for (size_t j = 0; j < step; ++j) {
-    //                     ori[j] = data[base + j * offsetx2];
-    //                 }
-
-    //                 svfloat32_t ori_sve = svld1(pg, ori);
-    //                 svfloat32_t quant_sve = svsub_f32_x(pg, ori_sve, sum); // prediction error
-    //                 T tmp[step];
-    //                 int quant_vals[step];
-
-    //                 quantize_1D_float (sum, ori_sve, quant_sve, tmp, pg, pg64);
-
-    //                 svint32_t quant_sve_i = svcvt_s32_f32_z(pg, quant_sve);
-    //                 svst1(pg, quant_vals, quant_sve_i);
-
-    //                 size_t j = 0;
-    //                 #pragma unroll
-    //                 for ( ; j < step && i + j + 3 < odd_len; ++j) {
-    //                     if (quant_vals[j] != 0)
-    //                         data[(start + (j << 1)) * offset] = tmp[j];
-    //                     else
-    //                         quantizer.save_unpred2(ori[j], tid);
-    //                     ++frequencyList[tid][quant_vals[j]];
-    //                 }
-    //                 svst1(pg, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
-    //                 local_quant_index[tid].value += j;
-    //             }
-    //             else if constexpr (CompMode == COMPMODE::DECOMP) { // decomp
-    //                 svint32_t quant_sve_i = svld1_s32(pg, local_quant_inds[tid] + local_quant_index[tid].value);
-    //                 int quant_vals[step];
-    //                 svst1(pg, quant_vals, quant_sve_i);
-    //                 quant_sve_i = svsub_n_s32_x(pg, quant_sve_i, radius);
-                    
-    //                 svfloat64_t decompressed_even_f64 = svcvt_f64_s32_x(pg64, quant_sve_i);
-    //                 svfloat64_t decompressed_odd_f64  = svcvtlt_f64_f32_x(pg64, svcvt_f32_s32_x(pg, quant_sve_i));
-                    
-    //                 decompressed_even_f64 = svmul_n_f64_x(pg64, decompressed_even_f64, real_ebx2);
-    //                 decompressed_odd_f64 = svmul_n_f64_x(pg64, decompressed_odd_f64, real_ebx2);
-                    
-    //                 svfloat32_t decompressed = svcvt_f32_f64_x(pg64, decompressed_even_f64);
-    //                 decompressed = svcvtnt_f32_f64_x(decompressed, pg64, decompressed_odd_f64);
-                    
-    //                 decompressed = svadd_f32_x(pg, decompressed, sum);
-
-    //                 T tmp[step];
-    //                 svst1_f32(pg, tmp, decompressed);
-                    
-    //                 size_t j = 0;
-    //                 for ( ; j < step && i + j + 3 < odd_len; ++j) {
-    //                     if (quant_vals[j] != 0) 
-    //                         data[(start + (j << 1)) * offset] = tmp[j];
-    //                     else 
-    //                         data[(start + (j << 1)) * offset] = quantizer.recover_unpred2(tid);
-    //                 }
-    //                 local_quant_index[tid].value += j;
-    //             }
-    //         }
-    //     }
-    //     else if constexpr (std::is_same_v<T, double>) {
-    //         const size_t step = SVE2_parallelism;
-    //         svbool_t pg64 = svptrue_b64();
-    //         for (; i + 3 < even_len; i += step) { // 3 is not AVX_256_parallelism - 1 !!
-
-    //             svfloat64_t va = svld1(pg64, &buf[i]);
-    //             svfloat64_t vb = svld1(pg64, &buf[i + 1]);
-    //             svfloat64_t vc = svld1(pg64, &buf[i + 2]);
-                
-    //             svfloat64_t sum = svadd_f64_x(pg64, vb, vc);
-    //             sum = svmul_n_f64_x(pg64, sum, 9.0);
-
-    //             svfloat64_t vd = svld1(pg64, &buf[i + 3]);
-    //             sum = svsub_f64_x(pg64, sum, va);
-    //             sum = svsub_f64_x(pg64, sum, vd);
-    //             sum = svmul_n_f64_x(pg64, sum, 0.0625);
-
-    //             size_t start = (i << 1) + 3;
-    //             if constexpr (CompMode == COMPMODE::COMP) {
-    //                 T ori[step];
-    //                 size_t base = start * offset;
-    //                 size_t offsetx2 = offset << 1;
-
-    //                 #pragma unroll
-    //                 for (size_t j = 0; j < step; ++j) {
-    //                     ori[j] = data[base + j * offsetx2];
-    //                 }
-
-    //                 svfloat64_t ori_sve = svld1(pg64, ori);
-    //                 svfloat64_t quant_sve = svsub_f64_x(pg64, ori_sve, sum); // prediction error
-    //                 T tmp[step];
-    //                 int quant_vals[step];
-    //                 quantize_1D_double(sum, ori_sve, quant_sve, tmp, pg64);
-                    
-    //                 svint64_t quant_sve_i = svcvt_s64_f64_x(pg64, quant_sve);
-                    
-    //                 svst1w_s64(pg64, quant_vals, quant_sve_i);
-
-    //                 size_t j = 0;
-    //                 #pragma unroll
-    //                 for ( ; j < step && i + j + 3 < odd_len; ++j) {
-    //                     if (quant_vals[j] != 0)
-    //                         data[(start + (j << 1)) * offset] = tmp[j];
-    //                     else
-    //                         quantizer.save_unpred2(ori[j], tid);
-    //                     ++frequencyList[tid][quant_vals[j]];
-    //                 }
-    //                 svst1w_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
-    //                 local_quant_index[tid].value += j;
-    //             }
-    //             else if constexpr (CompMode == COMPMODE::DECOMP) { // decomp
-    //                 svint64_t quant_sve_i = svld1sw_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value);
-    //                 int quant_vals[step];
-    //                 svst1w_s64(pg64, quant_vals, quant_sve_i);
-    //                 quant_sve_i = svsub_n_s64_x(pg64, quant_sve_i, radius);
-
-    //                 svfloat64_t decompressed = svmla_f64_x(pg64, sum, 
-    //                         svcvt_f64_s64_x(pg64, quant_sve_i), svdup_f64(real_ebx2));
-    //                 T tmp[step];
-    //                 svst1_f64(pg64, tmp, decompressed);
-    //                 size_t j = 0;
-    //                 for ( ; j < step && i + j + 3 < odd_len; ++j) {
-    //                     if (quant_vals[j] != 0) 
-    //                         data[(start + (j << 1)) * offset] = tmp[j];
-    //                     else
-    //                         data[(start + (j << 1)) * offset] = quantizer.recover_unpred2(tid);
-    //                 }
-    //                 local_quant_index[tid].value += j;  
-    //             }
-
-    //         }
-    //     }
-        
-    //     if(odd_len > 1){
-    //         if(odd_len < even_len){//the only boundary is p[len- 1] 
-    //             //odd_len < even_len so even_len > 2
-    //             T edge_pred;
-    //             edge_pred = interp_quad_2(buf[even_len - 3], buf[even_len - 2], buf[even_len - 1]);
-    //             int last = 2 * odd_len - 1;
-    //             quantize_func(cur_ij_offset + last * offset, data[last * offset], edge_pred, tid);
-
-    //         }
-    //         else{//the boundary points are is p[len -2 ] and p[len -1 ]
-    //             T edge_pred;
-    //             if(odd_len > 2){ //len - 2
-    //              //odd_len = even_len so even_len > 2
-    //                 edge_pred = interp_quad_2(buf[even_len - 3],  buf[even_len - 2], buf[even_len - 1]);
-    //                 int last = 2 * odd_len - 3;
-    //                 quantize_func(cur_ij_offset + last * offset, data[last * offset], edge_pred, tid);
-    //             }
-    //             //len -1
-    //             //odd_len = even_len so even_len > 1
-    //                 edge_pred = interp_linear1(buf[even_len - 2], buf[even_len - 1]);
-    //                 int last = 2 * odd_len - 1;
-    //                 quantize_func(cur_ij_offset + last * offset, data[last * offset], edge_pred, tid);
-                
-
-    //         }
-    //     }
-    // }
-
-    // template <class T, uint N, class QuantizerOMP>
-    // template <COMPMODE CompMode, class QuantizeFunc>
-    // ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_linear_and_quantize(const T * a, const T* b, size_t &len, T* data, 
-    //     size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
-        
-    //     size_t i = 0;
-    //     if constexpr (std::is_same_v<T, float>) {
-    //         const size_t step = SVE2_parallelism;
-    //         svbool_t pg = svptrue_b32();
-    //         svbool_t pg64 = svptrue_b64();
-    //         for (; i  < len; i += step) {
-    //             svfloat32_t va = svld1(pg, &a[i]);
-    //             svfloat32_t vb = svld1(pg, &b[i]);
-
-    //             svfloat32_t sum = svadd_f32_x(pg, va, vb);
-    //             sum = svmul_n_f32_x(pg, sum, 0.5f);   
-                
-    //             quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
-    //         }
-    //     }
-    //     else if constexpr (std::is_same_v<T, double>) {
-    //         const size_t step = SVE2_parallelism;
-    //         svbool_t pg64 = svptrue_b64();
-
-    //         for (; i  < len; i += step) {
-    //             svfloat64_t va = svld1(pg64, &a[i]);
-    //             svfloat64_t vb = svld1(pg64, &b[i]);
-
-    //             svfloat64_t sum = svadd_f64_x(pg64, va, vb);
-    //             sum = svmul_n_f64_x(pg64, sum, 0.5);
-    //             quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
-    //         }
-    //     }
-    // }
-
-    // template <class T, uint N, class QuantizerOMP>
-    // template <COMPMODE CompMode, class QuantizeFunc>
-    // ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_cubic_and_quantize(const T * a, const T* b, T* c, T*d, size_t &len, T* data, 
-    //     size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
-
-    //     size_t i = 0;
-    //     if constexpr (std::is_same_v<T, float>) {
-    //         const size_t step = SVE2_parallelism;
-    //         svbool_t pg = svptrue_b32();
-    //         svbool_t pg64 = svptrue_b64();
-
-    //         for (; i  < len; i += step) {
-    //             svfloat32_t va = svld1(pg, &a[i]);
-    //             svfloat32_t vb = svld1(pg, &b[i]);
-    //             svfloat32_t vc = svld1(pg, &c[i]);
-                
-    //             svfloat32_t sum = svadd_f32_x(pg, vb, vc);
-    //             sum = svmul_n_f32_x(pg, sum, 9.0f);
-
-    //             svfloat32_t vd = svld1(pg, &d[i]);
-                
-    //             sum = svsub_f32_x(pg, sum, va);
-    //             sum = svsub_f32_x(pg, sum, vd);
-    //             sum = svmul_n_f32_x(pg, sum, 0.0625f);
-                
-    //             // _mm256_storeu_ps(p + i, sum);
-    //             quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
-    //         }
-    //     }
-    //     else if constexpr (std::is_same_v<T, double>) {
-    //         const size_t step = SVE2_parallelism;
-    //         svbool_t pg64 = svptrue_b64();
-
-    //         for (; i  < len; i += step) {
-    //             svfloat64_t va = svld1(pg64, &a[i]);
-    //             svfloat64_t vb = svld1(pg64, &b[i]);
-    //             svfloat64_t vc = svld1(pg64, &c[i]);
-                
-    //             svfloat64_t sum = svadd_f64_x(pg64, vb, vc);
-    //             sum = svmul_n_f64_x(pg64, sum, 9.0);
-
-    //             svfloat64_t vd = svld1(pg64, &d[i]);
-                
-    //             sum = svsub_f64_x(pg64, sum, va);
-    //             sum = svsub_f64_x(pg64, sum, vd);
-    //             sum = svmul_n_f64_x(pg64, sum, 0.0625);
-
-    //             quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
-    //         }
-    //     }
-    // }
-    
-    // template <class T, uint N, class QuantizerOMP>
-    // template <COMPMODE CompMode, class QuantizeFunc>
-    // ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_equal_and_quantize(const T * a, size_t &len, T* data, 
-    //     size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
-    //     size_t i = 0;
-    //     if constexpr (std::is_same_v<T, float>) {
-    //         const size_t step = SVE2_parallelism;
-    //         svbool_t pg = svptrue_b32();
-    //         svbool_t pg64 = svptrue_b64();
-
-    //         for (; i  < len; i += step) {
-    //             svfloat32_t sum = svld1(pg, &a[i]);                
-    //             // _mm256_storeu_ps(p + i, sum);
-    //             quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
-    //         }
-    //     }
-    //     else if constexpr (std::is_same_v<T, double>) {
-    //         const size_t step = SVE2_parallelism;
-    //         svbool_t pg64 = svptrue_b64();
-
-    //         for (; i  < len; i += step) {
-    //             svfloat64_t sum = svld1(pg64, &a[i]);                
-    //             quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
-    //         }
-    //     }
-    // }
-
-    // template <class T, uint N, class QuantizerOMP>
-    // template <COMPMODE CompMode, class QuantizeFunc>
-    // ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_linear1_and_quantize(const T * a, const T* b, size_t &len, T* data, 
-    //     size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
-  
-    //     size_t i = 0;
-    //     if constexpr (std::is_same_v<T, float>) {
-    //         const size_t step = SVE2_parallelism;
-    //         svbool_t pg = svptrue_b32();
-    //         svbool_t pg64 = svptrue_b64();
-    //         for (; i  < len; i += step) {
-    //             svfloat32_t va = svld1(pg, &a[i]);  
-    //             svfloat32_t vb = svld1(pg, &b[i]);
-    //             vb = svmul_n_f32_x(pg, vb, 1.5f);
-    //             svfloat32_t sum = svmls_n_f32_x(pg, vb, va, 0.5f);
-    //             // _mm256_storeu_ps(p + i, sum);
-    //             quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
-    //         }
-    //     }
-    //     else if constexpr (std::is_same_v<T, double>) {
-    //         const size_t step = SVE2_parallelism;
-    //         svbool_t pg64 = svptrue_b64();
-            
-    //         for (; i  < len; i += step) {
-    //             svfloat64_t va = svld1(pg64, &a[i]);  
-    //             svfloat64_t vb = svld1(pg64, &b[i]);
-    //             vb = svmul_n_f64_x(pg64, vb, 1.5);
-    //             svfloat64_t sum = svmls_n_f64_x(pg64, vb, va, 0.5);
-    //             quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
-    //         }
-    //     }
-    // }
-
-    // template <class T, uint N, class QuantizerOMP>
-    // template <COMPMODE CompMode, class QuantizeFunc>
-    // ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_quad1_and_quantize(const T * a, const T* b, const T* c, size_t &len, T* data, 
-    //     size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
-
-    //     size_t i = 0;
-    //     if constexpr (std::is_same_v<T, float>) {
-    //         const size_t step = SVE2_parallelism;
-    //         svbool_t pg = svptrue_b32();
-    //         svbool_t pg64 = svptrue_b64();
-
-    //         for (; i  < len; i += step) {
-    //             svfloat32_t vb = svld1(pg, &b[i]);
-    //             svfloat32_t vc = svld1(pg, &c[i]);
-    //             vb = svnmls_n_f32_x(pg, vc, vb, 6.0f);
-    //             svfloat32_t va = svld1(pg, &a[i]);  
-    //             svfloat32_t sum = svmla_n_f32_x(pg, vb, va, 3.0f);
-    //             sum = svmul_n_f32_x(pg, sum, 0.125f);
-    //             // _mm256_storeu_ps(p + i, sum);
-    //             quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
-    //         }
-    //     }
-    //     else if constexpr (std::is_same_v<T, double>) {
-    //         const size_t step = SVE2_parallelism;
-    //         svbool_t pg64 = svptrue_b64();
-            
-    //         for (; i  < len; i += step) {
-    //             svfloat64_t vb = svld1(pg64, &b[i]);
-    //             svfloat64_t vc = svld1(pg64, &c[i]);
-    //             vb = svnmls_n_f64_x(pg64, vc, vb, 6.0);
-    //             svfloat64_t va = svld1(pg64, &a[i]);  
-    //             svfloat64_t sum = svmla_n_f64_x(pg64, vb, va, 3.0);
-    //             sum = svmul_n_f64_x(pg64, sum, 0.125);
-    //             quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
-    //         }
-
-    //     }      
-    // }
-
-    // template <class T, uint N, class QuantizerOMP>
-    // template <COMPMODE CompMode, class QuantizeFunc>
-    // ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_quad2_and_quantize (const T * a, const T* b, const T* c, size_t &len, T* data, 
-    //     size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func) {
-    //     size_t i = 0;
-    //     if constexpr (std::is_same_v<T, float>) {
-    //         const size_t step = SVE2_parallelism;
-    //         svbool_t pg = svptrue_b32();
-    //         svbool_t pg64 = svptrue_b64();
-
-    //         for (; i  < len; i += step) {
-    //             svfloat32_t va = svld1(pg, &a[i]);
-    //             svfloat32_t vb = svld1(pg, &b[i]);
-    //             vb = svnmls_n_f32_x(pg, va, vb, 6.0f);
-
-    //             svfloat32_t vc = svld1(pg, &c[i]);
-    //             svfloat32_t sum = svmla_n_f32_x(pg, vb, vc, 3.0f);
-    //             sum = svmul_n_f32_x(pg, sum, 0.125f);
-    //             // _mm256_storeu_ps(p + i, sum);
-    //             quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64, tid);
-    //         }
-    //     }
-    //     else if constexpr (std::is_same_v<T, double>) {
-
-    //         const size_t step = SVE2_parallelism;
-    //         svbool_t pg64 = svptrue_b64();
-
-    //         for (; i  < len; i += step) {
-    //             svfloat64_t va = svld1(pg64, &a[i]);
-    //             svfloat64_t vb = svld1(pg64, &b[i]);
-    //             vb = svnmls_n_f64_x(pg64, va, vb, 6.0);
-
-    //             svfloat64_t vc = svld1(pg64, &c[i]);
-    //             svfloat64_t sum = svmla_n_f64_x(pg64, vb, vc, 3.0);
-    //             sum = svmul_n_f64_x(pg64, sum, 0.125);
-    //             // _mm256_storeu_ps(p + i, sum);
-    //             quantize_double<CompMode>(sum, i, data, offset, len, step, pg64, tid);
-    //         }
-    //     }   
-      
-    // }
 
     template <class T, uint N, class QuantizerOMP>
     template<typename U, typename>
