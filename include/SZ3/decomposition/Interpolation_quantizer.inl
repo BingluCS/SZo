@@ -907,8 +907,8 @@ namespace SZ3 {
         if constexpr (std::is_same_v<T, float>) {
             // const size_t step = AVX_256_parallelism;
             static const size_t step = SVE2_parallelism;
-            static const  pg = svptrue_b32();
-            static const  pg64 = svptrue_b64();
+            const svbool_t pg = svptrue_b32();
+            const svbool_t pg64 = svptrue_b64();
             for (; i + 1  < even_len; i += step) { // 3 is not AVX_256_parallelism - 1 !!
                 // predict
                 // svbool_t pg = svwhilelt_b32(i, even_len - 1);
