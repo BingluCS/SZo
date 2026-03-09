@@ -37,31 +37,18 @@ T data_range(const T *data, size_t num) {
     constexpr bool is_float  = std::is_same_v<T, float>;
     constexpr bool is_double = std::is_same_v<T, double>;
     if constexpr (is_float) {
-        svbool_t pg = svptrue_b32();
-        size_t vl = svcntw();  // number of floats per SVE vector
-        int res = num % vl;
 #ifdef _OPENMP
-        #pragma omp parallel reduction(min:min_val) reduction(max:max_val)
-        {
-            svfloat32_t vmax = svdup_f32(data[0]);
-            svfloat32_t vmin = svdup_f32(data[0]);
-            #pragma omp for nowait
-            for (size_t i = 0; i  < num - res; i += vl) {
-                svfloat32_t v = svld1_f32(pg, data + i);
-                vmax = svmax_f32_x(pg, vmax, v);
-                vmin = svmin_f32_x(pg, vmin, v);
-            }
-            max_val = std::max(max_val, static_cast<T>(svmaxv_f32(pg, vmax)));
-            min_val = std::min(min_val, static_cast<T>(svminv_f32(pg, vmin)));
-        }
-        for (size_t k = num - res; k < num; ++k) {
-            max_val = std::max(max_val, data[k]);
-            min_val = std::min(min_val, data[k]);
+        // GCC ICE: SVE intrinsics cannot be used inside any omp parallel region
+        // (including with nowait) on this compiler version. Use scalar OMP only.
+        #pragma omp parallel for reduction(min:min_val) reduction(max:max_val)
+        for (size_t i = 0; i < num; ++i) {
+            if (data[i] > max_val) max_val = data[i];
+            if (data[i] < min_val) min_val = data[i];
         }
         return max_val - min_val;
 #else
+        const size_t vl = svcntw();
         svbool_t pg = svptrue_b32();
-        uint64_t vl = svcntw();
         svfloat32_t vmax = svdup_f32(data[0]);
         svfloat32_t vmin = svdup_f32(data[0]);
         size_t i = 0;
@@ -79,41 +66,27 @@ T data_range(const T *data, size_t num) {
         return maxval - minval;
 #endif
     } else if constexpr (is_double) {
-        svbool_t pg = svptrue_b64();
-        size_t vl = svcntd();  // number of doubles per SVE vector
-        int res = num % vl;
 #ifdef _OPENMP
-        #pragma omp parallel reduction(min:min_val) reduction(max:max_val)
-        {
-            svfloat64_t vmax = svdup_f64(data[0]);
-            svfloat64_t vmin = svdup_f64(data[0]);
-            #pragma omp for nowait
-            for (size_t i = 0; i  < num - res; i += vl) {
-                svfloat64_t v = svld1_f64(pg, data + i);
-                vmax = svmax_f64_x(pg, vmax, v);
-                vmin = svmin_f64_x(pg, vmin, v);
-            }
-            max_val = std::max(max_val, static_cast<T>(svmaxv_f64(pg, vmax)));
-            min_val = std::min(min_val, static_cast<T>(svminv_f64(pg, vmin)));
-        }
-        for (size_t k = num - res; k < num; ++k) {
-            max_val = std::max(max_val, data[k]);
-            min_val = std::min(min_val, data[k]);
+        // Same GCC ICE issue with SVE + OMP: use scalar OMP only.
+        #pragma omp parallel for reduction(min:min_val) reduction(max:max_val)
+        for (size_t i = 0; i < num; ++i) {
+            if (data[i] > max_val) max_val = data[i];
+            if (data[i] < min_val) min_val = data[i];
         }
         return max_val - min_val;
 #else
-        svbool_t pg = svptrue_b64();
-        uint64_t vl = svcntd();
+        const size_t vl = svcntd();
+        svbool_t pg64 = svptrue_b64();
         svfloat64_t vmax = svdup_f64(data[0]);
         svfloat64_t vmin = svdup_f64(data[0]);
         size_t i = 0;
         for (; i + vl <= num; i += vl) {
-            svfloat64_t v = svld1_f64(pg, data + i);
-            vmax = svmax_f64_x(pg, vmax, v);
-            vmin = svmin_f64_x(pg, vmin, v);
+            svfloat64_t v = svld1_f64(pg64, data + i);
+            vmax = svmax_f64_x(pg64, vmax, v);
+            vmin = svmin_f64_x(pg64, vmin, v);
         }
-        T maxval = static_cast<T>(svmaxv_f64(pg, vmax));
-        T minval = static_cast<T>(svminv_f64(pg, vmin));
+        T maxval = static_cast<T>(svmaxv_f64(pg64, vmax));
+        T minval = static_cast<T>(svminv_f64(pg64, vmin));
         for (; i < num; ++i) {
             maxval = std::max(maxval, data[i]);
             minval = std::min(minval, data[i]);
