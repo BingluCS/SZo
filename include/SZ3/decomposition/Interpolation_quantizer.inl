@@ -1400,10 +1400,10 @@ namespace SZ3 {
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
-                        for (; i < len; ++i) {
-                size_t start = i * offset;
-                quantize_func(cur_ij_offset + start,  data[start], interp_linear(a[i], b[i]));
-            }
+                    for (; i < len; ++i) {
+            size_t start = i * offset;
+            quantize_func(cur_ij_offset + start,  data[start], interp_cubic(a[i], b[i], c[i], d[i]));
+        }
             // const size_t step = 8;
             // svbool_t pg64 = svptrue_b64();
 
@@ -1483,10 +1483,10 @@ namespace SZ3 {
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
-                        for (; i < len; ++i) {
-                size_t start = i * offset;
-                quantize_func(cur_ij_offset + start,  data[start], interp_linear(a[i], b[i]));
-            }
+                    for (; i < len; ++i) {
+            size_t start = i * offset;
+            quantize_func(cur_ij_offset + start,  data[start], a[i]);
+        }
             // constexpr size_t step = AVX_256_parallelism;
             // const __m256d factor = _mm256_set1_pd(0.5);
 
@@ -1524,10 +1524,10 @@ namespace SZ3 {
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
-                        for (; i < len; ++i) {
-                size_t start = i * offset;
-                quantize_func(cur_ij_offset + start,  data[start], interp_linear(a[i], b[i]));
-            }
+                    for (; i < len; ++i) {
+            size_t start = i * offset;
+            quantize_func(cur_ij_offset + start,  data[start], interp_linear1(a[i], b[i]));
+        }
             // constexpr size_t step = AVX_256_parallelism;
             // const __m256d factor = _mm256_set1_pd(0.5);
 
@@ -1567,10 +1567,10 @@ namespace SZ3 {
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
-                        for (; i < len; ++i) {
-                size_t start = i * offset;
-                quantize_func(cur_ij_offset + start,  data[start], interp_linear(a[i], b[i]));
-            }
+                    for (; i < len; ++i) {
+            size_t start = i * offset;
+            quantize_func(cur_ij_offset + start,  data[start], interp_quad_1(a[i], b[i], c[i]));
+        }
             // constexpr size_t step = AVX_256_parallelism;
             // const __m256d factor = _mm256_set1_pd(0.5);
 
@@ -1610,10 +1610,10 @@ namespace SZ3 {
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
-                        for (; i < len; ++i) {
-                size_t start = i * offset;
-                quantize_func(cur_ij_offset + start,  data[start], interp_linear(a[i], b[i]));
-            }
+                    for (; i < len; ++i) {
+            size_t start = i * offset;
+            quantize_func(cur_ij_offset + start,  data[start], interp_quad_2(a[i], b[i], c[i]));
+        }
             // constexpr size_t step = AVX_256_parallelism;
             // const __m256d factor = _mm256_set1_pd(0.5);
 
