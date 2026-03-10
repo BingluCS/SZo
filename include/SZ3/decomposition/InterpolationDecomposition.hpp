@@ -35,9 +35,9 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
     T *decompress(const Config &conf, int* quant_inds_vec, T *dec_data) override {
         init();
 #ifdef __ARM_FEATURE_SVE2
-        auto buffer_len = max_dim +  2 * SVE2_parallelism - max_dim % SVE2_parallelism;
+        buffer_len = max_dim +  2 * SVE2_parallelism - max_dim % SVE2_parallelism;
 #else
-        auto buffer_len = max_dim +  2 * AVX_256_parallelism - max_dim % AVX_256_parallelism;
+        buffer_len = max_dim +  2 * AVX_256_parallelism - max_dim % AVX_256_parallelism;
 #endif
         interp_buffer_1 = new T[buffer_len];
         interp_buffer_2 = new T[buffer_len];
@@ -115,9 +115,9 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
         init();
         blocksize = max_dim;
 #ifdef __ARM_FEATURE_SVE2
-        auto buffer_len = max_dim +  2 * SVE2_parallelism - max_dim % SVE2_parallelism;
+        buffer_len = max_dim +  2 * SVE2_parallelism - max_dim % SVE2_parallelism;
 #else
-        auto buffer_len = max_dim +  2 * AVX_256_parallelism - max_dim % AVX_256_parallelism;
+        buffer_len = max_dim +  2 * AVX_256_parallelism - max_dim % AVX_256_parallelism;
 #endif
         interp_buffer_1 = new T[buffer_len];
         interp_buffer_2 = new T[buffer_len];

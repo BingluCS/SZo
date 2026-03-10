@@ -276,7 +276,9 @@ class HuffmanEncoder : public concepts::EncoderInterface<T> {
     
         T* decode(const uchar *&bytes, size_t targetLength) override {
         node root = treeRoot;
-        T* out = new T[targetLength];
+        // Add SIMD padding to prevent SVE/AVX out-of-bounds reads at buffer tail
+        constexpr size_t simd_padding = 64 / sizeof(T);  // 64 bytes = max SVE width (512-bit) / sizeof(T)
+        T* out = new T[targetLength + simd_padding];
         size_t count = 0;
 
         // 先读出 bitstream 的长度（字节数）

@@ -1122,7 +1122,7 @@ namespace SZ3 {
 
                     size_t j = 0;
                     #pragma unroll
-                    for ( ; j < step && i + j + 3 < odd_len; ++j) {
+                    for ( ; j < step && i + j + 3 < even_len; ++j) {
                         if (quant_vals[j] != 0)
                             data[(start + (j << 1)) * offset] = tmp[j];
                         else
@@ -1153,7 +1153,7 @@ namespace SZ3 {
                     svst1_f32(pg, tmp, decompressed);
                     
                     size_t j = 0;
-                    for ( ; j < step && i + j + 3 < odd_len; ++j) {
+                    for ( ; j < step && i + j + 3 < even_len; ++j) {
                         if (quant_vals[j] != 0) 
                             data[(start + (j << 1)) * offset] = tmp[j];
                         else 
@@ -1203,7 +1203,7 @@ namespace SZ3 {
 
                     size_t j = 0;
                     #pragma unroll
-                    for ( ; j < step && i + j + 3 < odd_len; ++j) {
+                    for ( ; j < step && i + j + 3 < even_len; ++j) {
                         if (quant_vals[j] != 0)
                             data[(start + (j << 1)) * offset] = tmp[j];
                         else
@@ -1224,7 +1224,7 @@ namespace SZ3 {
                     T tmp[step];
                     svst1_f64(pg64, tmp, decompressed);
                     size_t j = 0;
-                    for ( ; j < step && i + j + 3 < odd_len; ++j) {
+                    for ( ; j < step && i + j + 3 < even_len; ++j) {
                         if (quant_vals[j] != 0) 
                             data[(start + (j << 1)) * offset] = tmp[j];
                         else

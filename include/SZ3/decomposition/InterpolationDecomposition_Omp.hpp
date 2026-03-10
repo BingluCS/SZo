@@ -101,7 +101,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
             recover_anchor_grid2(dec_data);  // recover anchor points, not needed because because all outliers were previously unpacked.
             start_level--;
         }
-#ifdef SZ3_PRINT_TIMING
+#ifdef SZ3_PRINT_TIMINGS
         timer.stop("other");
         timer.start();
 #endif

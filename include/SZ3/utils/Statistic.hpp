@@ -21,7 +21,7 @@ namespace SZ3 {
 // Helper: SVE2 min/max over a contiguous chunk [begin, end).
 // Must live in its own target("sve2") function to avoid GCC ICE
 // when SVE intrinsics are instantiated inside an omp parallel region.
-__attribute__((target("sve2")))
+__attribute__((target("+sve2")))
 inline void sve2_minmax_f32(const float *data, size_t begin, size_t end,
                              float &out_min, float &out_max) {
     const size_t vl = svcntw();
@@ -42,7 +42,7 @@ inline void sve2_minmax_f32(const float *data, size_t begin, size_t end,
     }
 }
 
-__attribute__((target("sve2")))
+__attribute__((target("+sve2")))
 inline void sve2_minmax_f64(const double *data, size_t begin, size_t end,
                               double &out_min, double &out_max) {
     const size_t vl = svcntd();
