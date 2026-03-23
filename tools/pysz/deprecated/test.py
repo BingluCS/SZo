@@ -8,9 +8,9 @@ data = np.random.uniform(low=0, high=1, size=(100, 100))
 # init SZ (both SZ2 and SZ3 are supported)
 # Please change the path to the SZ dynamic library file in your system
 lib_extention = {
-    "darwin": "libSZ3c.dylib",
-    "windows": "SZ3c.dll",
-}.get(sys.platform, "libSZ3c.so")
+    "darwin": "libSZOc.dylib",
+    "windows": "SZOc.dll",
+}.get(sys.platform, "libSZOc.so")
 
 sz = SZ("../../install/lib/{}".format(lib_extention))
 

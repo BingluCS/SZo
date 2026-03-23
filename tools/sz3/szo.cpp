@@ -16,9 +16,9 @@
 #define SZ_INT64 9
 
 inline void usage() {
-    printf("Note: SZ3 command line arguments are backward compatible with SZ2, \n");
+    printf("Note: SZo command line arguments are backward compatible with SZ2, \n");
     printf("      use -h2 to show the supported SZ2 command line arguments. \n");
-    printf("Usage: sz3 <options>\n");
+    printf("Usage: szo <options>\n");
     printf("Options:\n");
     printf("* general options:\n");
     printf("	-h: print the help information\n");
@@ -233,8 +233,8 @@ int main(int argc, char *argv[]) {
                 usage();
                 exit(0);
             case 'v':
-                printf("SZ3 Version: %s\n", SZ3_VER);
-                printf("SZ3 Data Format Version: %s\n", SZ3_DATA_VER);
+                printf("SZo Version: %s\n", SZ3_VER);
+                printf("SZo Data Format Version: %s\n", SZ3_DATA_VER);
                 printf("\nThird-party libraries copyright notices:\n");
                 printf("----------------------------------------\n");
                 printf("ska_hash:\n");

@@ -89,10 +89,14 @@ if (GSL_FOUND)
     target_link_libraries(${PROJECT_NAME} INTERFACE GSL::gsl)
 endif ()
 
-option(BUILD_SZ3_BINARY "build SZ3 tools" ON)
+option(BUILD_SZ3_BINARY "build SZO executable" ON)
 if (BUILD_SZ3_BINARY)
     add_subdirectory(tools/sz3)
-    #add_subdirectory(tools/sz3c)
+endif ()
+
+option(BUILD_SZOC_LIBRARY "build SZO C API library" ON)
+if (BUILD_SZOC_LIBRARY)
+    add_subdirectory(tools/sz3c)
 endif ()
 
 option(BUILD_H5Z_FILTER "build the H5Z-SZ3 filter" OFF)

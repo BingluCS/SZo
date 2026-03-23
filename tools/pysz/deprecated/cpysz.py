@@ -16,9 +16,9 @@ class SZ:
 
         if szpath is None:
             szpath = {
-                "darwin": "libSZ3c.dylib",
-                "win32": "SZ3c.dll",
-            }.get(sys.platform, "libSZ3c.so")
+                "darwin": "libSZOc.dylib",
+                "win32": "SZOc.dll",
+            }.get(sys.platform, "libSZOc.so")
 
         self.sz = ctypes.cdll.LoadLibrary(szpath)
 

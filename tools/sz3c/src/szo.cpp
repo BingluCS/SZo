@@ -2,7 +2,7 @@
 // Created by Kai Zhao on 10/27/22.
 //
 
-#include "sz3c.h"
+#include "szo.h"
 
 #include "SZ3/api/sz.hpp"
 

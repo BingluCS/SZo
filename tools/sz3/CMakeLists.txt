@@ -1,13 +1,11 @@
-file(GLOB cpu_source_files "${CMAKE_SOURCE_DIR}/tools/sz3/sz3.cpp")
+set(SZO_SOURCE_FILE "${CMAKE_SOURCE_DIR}/tools/sz3/szo.cpp")
+set(SZO_TARGET_NAME szo)
 
-foreach (SRCFILE IN LISTS cpu_source_files)
-    get_filename_component(EXE ${SRCFILE} NAME_WLE)
-    message(STATUS "Target = ${EXE}")
-    add_executable(${EXE} ${EXE}.cpp)
-    target_link_libraries(${EXE} PRIVATE SZ3)
-    install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/${EXE}$<TARGET_FILE_SUFFIX:${EXE}> TYPE BIN)
+message(STATUS "Target = ${SZO_TARGET_NAME}")
+add_executable(${SZO_TARGET_NAME} ${SZO_SOURCE_FILE})
+target_link_libraries(${SZO_TARGET_NAME} PRIVATE SZ3)
+install(TARGETS ${SZO_TARGET_NAME} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-endforeach ()
 install(FILES testfloat_8_8_128.dat DESTINATION ${CMAKE_INSTALL_DATADIR}/SZ3)
 
 #add_subdirectory(demo)

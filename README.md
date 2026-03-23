@@ -18,16 +18,16 @@ Then, you'll find all the executables in [INSTALL_DIR]/bin and header files in [
 
 ## How to run
 
-#### SZ3 Executable
-* You can use the executable 'tools/sz3/sz3' to do the compression/decompression.
+#### SZo Executable
+* You can use the executable 'tools/sz3/szo' to do the compression/decompression.
 
 #### SZ3 C++ API
 * Located in 'include/SZ3/api/sz.hpp'. 
 * Requiring a modern C++ compiler.  
 * Different with SZ2 API.
 
-#### SZ3 C API
-* Located in 'tools/sz3c/include/sz3c.h'
+#### SZOc C API
+* Located in 'tools/sz3c/include/szo.h'
 * Compatible with SZ2 API
 
 #### SZ3 Python API
