@@ -34,7 +34,7 @@
 #define SZ_INT32 7
 #define SZ_UINT64 8
 #define SZ_INT64 9
-#define SZ3_PRINT_TIMINGS 1
+// #define SZ3_PRINT_TIMINGS 1
 
 namespace SZ3 {
 
