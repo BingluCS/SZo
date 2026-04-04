@@ -4,6 +4,15 @@ add_library(${SZOC_TARGET_NAME} src/szo.cpp)
 
 target_link_libraries(${SZOC_TARGET_NAME} PUBLIC SZ3)
 
+# Keep the C API shared library on the same SIMD code path as the top-level build.
+if(ENABLE_AVX2)
+    target_compile_options(${SZOC_TARGET_NAME} PRIVATE -mavx2 -mfma)
+endif()
+
+if(ENABLE_SVE2)
+    target_compile_options(${SZOC_TARGET_NAME} PRIVATE -march=armv8.6-a+sve2)
+endif()
+
 target_compile_definitions(${SZOC_TARGET_NAME} PRIVATE SZOC_EXPORTS)
 
 target_include_directories(
