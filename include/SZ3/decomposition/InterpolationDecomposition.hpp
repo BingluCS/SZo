@@ -3,7 +3,6 @@
 
 #include <cmath>
 #include <cstring>
-#include <memory>
 #include "Decomposition.hpp"
 #include "SZ3/def.hpp"
 #include "SZ3/quantizer/Quantizer.hpp"
@@ -35,7 +34,6 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
     size_t* frequency;
     T *decompress(const Config &conf, int* quant_inds_vec, T *dec_data) override {
         init();
-        owned_quant_inds.reset();
 #ifdef __ARM_FEATURE_SVE2
         buffer_len = max_dim +  2 * SVE2_parallelism - max_dim % SVE2_parallelism;
 #else
@@ -132,8 +130,9 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
             interp_buffer_1[i] = interp_buffer_2[i] = interp_buffer_3[i] = interp_buffer_4[i] = T(0);
        
         double eb = quantizer.get_eb();
-        owned_quant_inds = std::make_unique<int[]>(num_elements);
+        std::unique_ptr<int[]> owned_quant_inds(new int[num]);
         quant_inds = owned_quant_inds.get();
+        // quant_inds = new int[num_elements];
         if (anchor_stride == 0) {  // check whether to use anchor points
             quant_inds[quant_index++] = quantizer.quantize_and_overwrite(*data, 0);  // no
         } else {
@@ -1422,7 +1421,6 @@ template <COMPMODE CompMode, class QuantizeFunc>
     int interp_id;
     uint blocksize;
     std::vector<std::string> interpolators = {"linear", "cubic"};
-    std::unique_ptr<int[]> owned_quant_inds;
     int *quant_inds;
     int quant_index = 0;
     double max_error;

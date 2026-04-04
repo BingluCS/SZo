@@ -2,7 +2,6 @@
 #define SZ3_COMPRESSOR_TYPE_ONE_HPP
 
 #include <cstring>
-#include <utility>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -31,7 +30,7 @@ template <class T, uint N, class Decomposition, class Encoder, class Lossless>
 class SZGenericCompressor : public concepts::CompressorInterface<T> {
    public:
     SZGenericCompressor(Decomposition decomposition, Encoder encoder, Lossless lossless)
-        : decomposition(std::move(decomposition)), encoder(std::move(encoder)), lossless(std::move(lossless)) {
+        : decomposition(decomposition), encoder(encoder), lossless(lossless) {
         static_assert(std::is_base_of<concepts::DecompositionInterface<T, int, N>, Decomposition>::value,
                       "must implement the frontend interface");
         static_assert(std::is_base_of<concepts::EncoderInterface<int>, Encoder>::value,
@@ -140,8 +139,8 @@ class SZGenericCompressor : public concepts::CompressorInterface<T> {
 template <class T, uint N, class Decomposition, class Encoder, class Lossless>
 std::shared_ptr<SZGenericCompressor<T, N, Decomposition, Encoder, Lossless>> make_compressor_sz_generic(
     Decomposition decomposition, Encoder encoder, Lossless lossless) {
-    return std::make_shared<SZGenericCompressor<T, N, Decomposition, Encoder, Lossless>>(
-        std::move(decomposition), std::move(encoder), std::move(lossless));
+    return std::make_shared<SZGenericCompressor<T, N, Decomposition, Encoder, Lossless>>(decomposition, encoder,
+                                                                                         lossless);
 }
 
 }  // namespace SZ3
