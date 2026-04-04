@@ -55,10 +55,9 @@ std::unique_ptr<Type[]> readfile(const char *file, size_t &num) {
     fin.seekg(0, std::ios::end);
     num = fin.tellg() / sizeof(Type);
     fin.seekg(0, std::ios::beg);
-    //        auto data = SZ3::compat::make_unique<Type[]>(num_elements);
-    size_t alignment = 256; 
-    Type* raw_ptr = static_cast<Type*>(::operator new(num * sizeof(Type), std::align_val_t(alignment)));
-    std::unique_ptr<Type[]> data(raw_ptr);
+    // Keep allocation/deallocation semantics consistent with the returned
+    // std::unique_ptr<Type[]> to avoid mismatched aligned delete errors.
+    std::unique_ptr<Type[]> data(new Type[num]);
     fin.read(reinterpret_cast<char *>(&data[0]), num * sizeof(Type));
     fin.close();
     return data;
