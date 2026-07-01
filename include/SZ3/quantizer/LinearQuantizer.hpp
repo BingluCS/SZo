@@ -2,6 +2,7 @@
 #define SZ3_LINEAR_QUANTIZER_HPP
 
 #include <cassert>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <vector>
@@ -42,7 +43,8 @@ class LinearQuantizer : public concepts::QuantizerInterface<T, int> {
             //if (diff < 0) 
             //    quant_index = -quant_index;
             //auto quant_index_shifted = this->radius + quant_index;
-            T decompressed_data = pred + quant_index * this->double_error_bound;
+            // fused, f64-intermediate dequant to match the SIMD (svmla / fmadd) paths bit-for-bit
+            T decompressed_data = static_cast<T>(std::fma(static_cast<double>(quant_index), this->double_error_bound, static_cast<double>(pred)));
             // if data is NaN, the error is NaN, and NaN <= error_bound is false
             T err = decompressed_data - data;
             if (err >= -this->error_bound && err <= this->error_bound) {
@@ -68,7 +70,8 @@ class LinearQuantizer : public concepts::QuantizerInterface<T, int> {
     }
 
     ALWAYS_INLINE T recover_pred(T pred, int quant_index) {
-        return pred + quant_index * this->double_error_bound;   // int16: no -radius
+        // must match quantize_and_overwrite's dequant exactly (fused, f64)
+        return static_cast<T>(std::fma(static_cast<double>(quant_index), this->double_error_bound, static_cast<double>(pred)));
     }
 
     ALWAYS_INLINE T recover_unpred() { return unpred[index++]; }

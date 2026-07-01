@@ -92,10 +92,12 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         }
         local_quant_inds = local_quant_inds_vec;
         local_quant_index = local_quant_index_vec;
+        quantizer.reset_local_unpred_idx(nThreads);  // rewind per-thread outlier read cursors (shared with compress)
         // std::cout << "pass" << std::endl;
         auto start_level = interp_level;
         if (anchor_stride == 0) {                                               // check whether used anchor points
-            *dec_data += quantizer.recover(0, this->quant_inds[0]);  // no anchor points
+            *dec_data += quantizer.recover2(0, local_quant_inds[0][0], 0);  // root code from thread 0, slot 0
+            local_quant_index[0].value = 1;                                 // thread 0's level codes follow the root
         } else {
             recover_anchor_grid2(dec_data);  // recover anchor points, not needed because because all outliers were previously unpacked.
             start_level--;
@@ -241,7 +243,8 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         double eb = quantizer.get_eb();
         auto start_level = interp_level;
         if (anchor_stride == 0) {  // check whether to use anchor points
-            quant_inds[0] = quantizer.quantize_and_overwrite(*data, 0, 0);  // no
+            local_quant_inds[0][0] = quantizer.quantize_and_overwrite2(*data, 0, 0);  // root code -> thread 0, slot 0 (serialized with the level codes)
+            local_quant_index[0].value = 1;                                           // thread 0's level codes follow the root
         } else {
             build_anchor_grid2(data);  // losslessly saving anchor points
             start_level--;
@@ -3230,7 +3233,6 @@ template <COMPMODE CompMode, class QuantizeFunc>
     int interp_id;
     uint blocksize;
     std::vector<std::string> interpolators = {"linear", "cubic"};
-    int16_t *quant_inds;
     QuantizerOMP quantizer;
     size_t num_elements;
     std::array<size_t, N> original_dimensions;

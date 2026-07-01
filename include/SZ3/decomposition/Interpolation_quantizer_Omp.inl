@@ -862,31 +862,25 @@ namespace SZ3 {
         
         if constexpr (std::is_same_v<T, float>) {
             static constexpr size_t step = AVX_256_parallelism;
-            const __m256 factor = _mm256_set1_ps(0.5f);
-            const __m256 three = _mm256_set1_ps(3.0f);
+            const __m256 half = _mm256_set1_ps(0.5f);
+            const __m256 threehalf = _mm256_set1_ps(1.5f);
             for (; i  < len; i += step) {
                 __m256 vb = _mm256_loadu_ps(b + i);
                 __m256 va = _mm256_loadu_ps(a + i);
-                vb= _mm256_mul_ps(vb, three);
-                __m256 sum = _mm256_sub_ps(vb, va); 
-                sum = _mm256_mul_ps(sum, factor);        
-                
-                // _mm256_storeu_ps(p + i, sum);
+                vb = _mm256_mul_ps(vb, threehalf);              // 1.5*b
+                __m256 sum = _mm256_fnmadd_ps(half, va, vb);    // 1.5*b - 0.5*a  (== interp_linear1, fused)
                 quantize_float<CompMode, step>(sum, i, data, offset, len, tid);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
             static constexpr size_t step = AVX_256_parallelism;
-            const __m256d factor = _mm256_set1_pd(0.5);
-            const __m256d three = _mm256_set1_pd(3.0);
+            const __m256d half = _mm256_set1_pd(0.5);
+            const __m256d threehalf = _mm256_set1_pd(1.5);
             for (; i  < len; i += step) {
                 __m256d va = _mm256_loadu_pd(a + i);
                 __m256d vb = _mm256_loadu_pd(b + i);
-                va = _mm256_mul_pd(va, three);
-                __m256d sum = _mm256_sub_pd(vb, va);                       
-                sum = _mm256_mul_pd(sum, factor);    
-                // _mm256_storeu_pd(p + i, sum);
-                // size_t start = i;
+                vb = _mm256_mul_pd(vb, threehalf);              // 1.5*b
+                __m256d sum = _mm256_fnmadd_pd(half, va, vb);   // 1.5*b - 0.5*a  (== interp_linear1, fused)
                 quantize_double<CompMode, step>(sum, i, data, offset, len, tid);
             }
         }
@@ -905,14 +899,11 @@ namespace SZ3 {
 
             for (; i  < len; i += step) {
                 __m256 va = _mm256_loadu_ps(a + i);
-                va = _mm256_mul_ps(va, three);
                 __m256 vb = _mm256_loadu_ps(b + i);
                 __m256 vc = _mm256_loadu_ps(c + i);
-                vb = _mm256_fmsub_ps(vb, six, vc);
-                __m256 sum = _mm256_add_ps(va, vb); 
-                sum = _mm256_mul_ps(sum, factor);        
-                
-                // _mm256_storeu_ps(p + i, sum);
+                vb = _mm256_fmsub_ps(vb, six, vc);           // 6*b - c
+                __m256 sum = _mm256_fmadd_ps(va, three, vb); // 3*a + (6b-c)  (fully fused)
+                sum = _mm256_mul_ps(sum, factor);            // *0.125
                 quantize_float<CompMode, step>(sum, i, data, offset, len, tid);
             }
         }
@@ -925,13 +916,10 @@ namespace SZ3 {
             for (; i  < len; i += step) {
                 __m256d va = _mm256_loadu_pd(a + i);
                 __m256d vb = _mm256_loadu_pd(b + i);
-                va = _mm256_mul_pd(va, three);
                 __m256d vc = _mm256_loadu_pd(c + i);
-                vb = _mm256_fmsub_pd(vb, six, vc);
-                __m256d sum = _mm256_add_pd(va, vb); 
-                sum = _mm256_mul_pd(sum, factor);    
-                // _mm256_storeu_pd(p + i, sum);
-                // size_t start = i;
+                vb = _mm256_fmsub_pd(vb, six, vc);            // 6*b - c
+                __m256d sum = _mm256_fmadd_pd(va, three, vb); // 3*a + (6b-c)  (fully fused)
+                sum = _mm256_mul_pd(sum, factor);             // *0.125
                 quantize_double<CompMode, step>(sum, i, data, offset, len, tid);
             }
         }
@@ -952,14 +940,10 @@ namespace SZ3 {
             for (; i  < len; i += step) {
                 __m256 va = _mm256_loadu_ps(a + i);
                 __m256 vc = _mm256_loadu_ps(c + i);
-                vc = _mm256_mul_ps(vc, three);
                 __m256 vb = _mm256_loadu_ps(b + i);
-                
-                vb = _mm256_fmsub_ps(vb, six, va);
-                __m256 sum = _mm256_add_ps(vc, vb); 
-                sum = _mm256_mul_ps(sum, factor);        
-                
-                // _mm256_storeu_ps(p + i, sum);
+                vb = _mm256_fmsub_ps(vb, six, va);           // 6*b - a
+                __m256 sum = _mm256_fmadd_ps(vc, three, vb); // 3*c + (6b-a)  (fully fused)
+                sum = _mm256_mul_ps(sum, factor);            // *0.125
                 quantize_float<CompMode, step>(sum, i, data, offset, len, tid);
             }
         }
@@ -972,14 +956,10 @@ namespace SZ3 {
             for (; i  < len; i += step) {
                 __m256d vc = _mm256_loadu_pd(c + i);
                 __m256d va = _mm256_loadu_pd(a + i);
-                vc = _mm256_mul_pd(vc, three);
                 __m256d vb = _mm256_loadu_pd(b + i);
-                
-                vb = _mm256_fmsub_pd(vb, six, va);
-                __m256d sum = _mm256_add_pd(vc, vb); 
-                sum = _mm256_mul_pd(sum, factor);     
-                // _mm256_storeu_pd(p + i, sum);
-                // size_t start = i;
+                vb = _mm256_fmsub_pd(vb, six, va);            // 6*b - a
+                __m256d sum = _mm256_fmadd_pd(vc, three, vb); // 3*c + (6b-a)  (fully fused)
+                sum = _mm256_mul_pd(sum, factor);             // *0.125
                 quantize_double<CompMode, step>(sum, i, data, offset, len, tid);
             }
         }
@@ -1234,10 +1214,261 @@ namespace SZ3 {
             local_quant_index[tid].value += processed;
         }
     }
-#elif defined(__ARM_FEATURE_SVE2) 
+#elif defined(__ARM_FEATURE_SVE2)
+    template <class T, uint N, class QuantizerOMP>
+    template <COMPMODE CompMode, bool EnableInnerOmp, class QuantizeFunc>
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_linear_and_quantize_1D_line(
+        T *data, const size_t &len, size_t& offset, size_t& cur_ij_offset, int& tid, QuantizeFunc &&quantize_func) {
+        if (len <= 1) {
+            return;
+        }
+        auto odd_len = len / 2;
+        auto even_len = len - odd_len;
+        T *odd_data = data + cur_ij_offset + offset;
+        size_t odd_offset = offset << 1;
+        size_t i = 0;
+        if constexpr (std::is_same_v<T, float>) {
+            static const size_t step = SVE2_parallelism;
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
+            if constexpr (EnableInnerOmp) {
+                const size_t vec_chunks = odd_len > step ? (odd_len - 1) / step : 0;
+                #pragma omp parallel for
+                for (size_t chunk = 0; chunk < vec_chunks; ++chunk) {
+                    svbool_t pg = svptrue_b32(); svbool_t pg64 = svptrue_b64();  // private inside the region: a shared sizeless SVE predicate ICEs GCC's OpenMP outliner
+                    size_t cur_i = chunk * step;
+                    int cur_tid = omp_get_thread_num();
+                    T a[step], b[step];
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) {
+                        size_t even = (cur_i + j) << 1;
+                        a[j] = data[cur_ij_offset + even * offset];
+                        b[j] = data[cur_ij_offset + (even + 2) * offset];
+                    }
+                    svfloat32_t sum = svmul_n_f32_x(pg, svadd_f32_x(pg, svld1(pg, a), svld1(pg, b)), 0.5f);
+                    size_t start = cur_i;
+                    quantize_float<CompMode>(sum, start, odd_data, odd_offset, odd_len, step, pg, pg64, cur_tid);
+                }
+                i = vec_chunks * step;
+            } else {
+                for (; i + step < odd_len; i += step) {
+                    T a[step], b[step];
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) {
+                        size_t even = (i + j) << 1;
+                        a[j] = data[cur_ij_offset + even * offset];
+                        b[j] = data[cur_ij_offset + (even + 2) * offset];
+                    }
+                    svfloat32_t sum = svmul_n_f32_x(pg, svadd_f32_x(pg, svld1(pg, a), svld1(pg, b)), 0.5f);
+                    size_t start = i;
+                    quantize_float<CompMode>(sum, start, odd_data, odd_offset, odd_len, step, pg, pg64, tid);
+                }
+            }
+        } else if constexpr (std::is_same_v<T, double>) {
+            static const size_t step = SVE2_parallelism;
+            svbool_t pg64 = svptrue_b64();
+            if constexpr (EnableInnerOmp) {
+                const size_t vec_chunks = odd_len > step ? (odd_len - 1) / step : 0;
+                #pragma omp parallel for
+                for (size_t chunk = 0; chunk < vec_chunks; ++chunk) {
+                    svbool_t pg64 = svptrue_b64();  // private inside the region: a shared sizeless SVE predicate ICEs GCC's OpenMP outliner
+                    size_t cur_i = chunk * step;
+                    int cur_tid = omp_get_thread_num();
+                    T a[step], b[step];
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) {
+                        size_t even = (cur_i + j) << 1;
+                        a[j] = data[cur_ij_offset + even * offset];
+                        b[j] = data[cur_ij_offset + (even + 2) * offset];
+                    }
+                    svfloat64_t sum = svmul_n_f64_x(pg64, svadd_f64_x(pg64, svld1(pg64, a), svld1(pg64, b)), 0.5);
+                    size_t start = cur_i;
+                    quantize_double<CompMode>(sum, start, odd_data, odd_offset, odd_len, step, pg64, cur_tid);
+                }
+                i = vec_chunks * step;
+            } else {
+                for (; i + step < odd_len; i += step) {
+                    T a[step], b[step];
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) {
+                        size_t even = (i + j) << 1;
+                        a[j] = data[cur_ij_offset + even * offset];
+                        b[j] = data[cur_ij_offset + (even + 2) * offset];
+                    }
+                    svfloat64_t sum = svmul_n_f64_x(pg64, svadd_f64_x(pg64, svld1(pg64, a), svld1(pg64, b)), 0.5);
+                    size_t start = i;
+                    quantize_double<CompMode>(sum, start, odd_data, odd_offset, odd_len, step, pg64, tid);
+                }
+            }
+        }
+        for (; i + 1 < odd_len; ++i) {
+            size_t start = ((i << 1) + 1) * offset;
+            quantize_func(cur_ij_offset + start, data[cur_ij_offset + start],
+                          interp_linear(data[cur_ij_offset + (i << 1) * offset],
+                                        data[cur_ij_offset + ((i << 1) + 2) * offset]), tid);
+        }
+        T pred_edge;
+        if (len < 3) {
+            pred_edge = data[cur_ij_offset + ((even_len - 1) << 1) * offset];
+        } else {
+            pred_edge = interp_linear1(data[cur_ij_offset + ((even_len - 2) << 1) * offset],
+                                       data[cur_ij_offset + ((even_len - 1) << 1) * offset]);
+        }
+        int last = 2 * odd_len - 1;
+        quantize_func(cur_ij_offset + last * offset, data[cur_ij_offset + last * offset], pred_edge, tid);
+    }
+
+    template <class T, uint N, class QuantizerOMP>
+    template <COMPMODE CompMode, bool EnableInnerOmp, class QuantizeFunc>
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_cubic_and_quantize_1D_line(
+        T *data, const size_t &len, size_t& offset, size_t& cur_ij_offset, int& tid, QuantizeFunc &&quantize_func) {
+        if (len <= 1) {
+            return;
+        }
+        auto odd_len = len / 2;
+        auto even_len = len - odd_len;
+        T pred_first;
+        if (even_len < 2) {
+            pred_first = data[cur_ij_offset];
+        } else if (even_len < 3) {
+            pred_first = interp_linear(data[cur_ij_offset], data[cur_ij_offset + 2 * offset]);
+        } else {
+            pred_first = interp_quad_1(data[cur_ij_offset], data[cur_ij_offset + 2 * offset],
+                                       data[cur_ij_offset + 4 * offset]);
+        }
+        quantize_func(cur_ij_offset + offset, data[cur_ij_offset + offset], pred_first, tid);
+
+        T *odd_data = data + cur_ij_offset + offset;
+        size_t odd_offset = offset << 1;
+        size_t i = 0;
+        if constexpr (std::is_same_v<T, float>) {
+            static const size_t step = SVE2_parallelism;
+            svbool_t pg = svptrue_b32();
+            svbool_t pg64 = svptrue_b64();
+            if constexpr (EnableInnerOmp) {
+                const size_t vec_chunks = even_len > step + 2 ? (even_len - 3) / step : 0;
+                #pragma omp parallel for
+                for (size_t chunk = 0; chunk < vec_chunks; ++chunk) {
+                    svbool_t pg = svptrue_b32(); svbool_t pg64 = svptrue_b64();  // private inside the region: a shared sizeless SVE predicate ICEs GCC's OpenMP outliner
+                    size_t cur_i = chunk * step;
+                    int cur_tid = omp_get_thread_num();
+                    T a[step], b[step], c[step], d[step];
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) {
+                        size_t even = (cur_i + j) << 1;
+                        a[j] = data[cur_ij_offset + even * offset];
+                        b[j] = data[cur_ij_offset + (even + 2) * offset];
+                        c[j] = data[cur_ij_offset + (even + 4) * offset];
+                        d[j] = data[cur_ij_offset + (even + 6) * offset];
+                    }
+                    svfloat32_t sum = svmul_n_f32_x(pg, svadd_f32_x(pg, svld1(pg, b), svld1(pg, c)), 9.0f);
+                    sum = svsub_f32_x(pg, sum, svld1(pg, a));
+                    sum = svsub_f32_x(pg, sum, svld1(pg, d));
+                    sum = svmul_n_f32_x(pg, sum, 0.0625f);
+                    size_t start = cur_i + 1;
+                    quantize_float<CompMode>(sum, start, odd_data, odd_offset, odd_len, step, pg, pg64, cur_tid);
+                }
+                i = vec_chunks * step;
+            } else {
+                for (; i + step + 2 < even_len; i += step) {
+                    T a[step], b[step], c[step], d[step];
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) {
+                        size_t even = (i + j) << 1;
+                        a[j] = data[cur_ij_offset + even * offset];
+                        b[j] = data[cur_ij_offset + (even + 2) * offset];
+                        c[j] = data[cur_ij_offset + (even + 4) * offset];
+                        d[j] = data[cur_ij_offset + (even + 6) * offset];
+                    }
+                    svfloat32_t sum = svmul_n_f32_x(pg, svadd_f32_x(pg, svld1(pg, b), svld1(pg, c)), 9.0f);
+                    sum = svsub_f32_x(pg, sum, svld1(pg, a));
+                    sum = svsub_f32_x(pg, sum, svld1(pg, d));
+                    sum = svmul_n_f32_x(pg, sum, 0.0625f);
+                    size_t start = i + 1;
+                    quantize_float<CompMode>(sum, start, odd_data, odd_offset, odd_len, step, pg, pg64, tid);
+                }
+            }
+        } else if constexpr (std::is_same_v<T, double>) {
+            static const size_t step = SVE2_parallelism;
+            svbool_t pg64 = svptrue_b64();
+            if constexpr (EnableInnerOmp) {
+                const size_t vec_chunks = even_len > step + 2 ? (even_len - 3) / step : 0;
+                #pragma omp parallel for
+                for (size_t chunk = 0; chunk < vec_chunks; ++chunk) {
+                    svbool_t pg64 = svptrue_b64();  // private inside the region: a shared sizeless SVE predicate ICEs GCC's OpenMP outliner
+                    size_t cur_i = chunk * step;
+                    int cur_tid = omp_get_thread_num();
+                    T a[step], b[step], c[step], d[step];
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) {
+                        size_t even = (cur_i + j) << 1;
+                        a[j] = data[cur_ij_offset + even * offset];
+                        b[j] = data[cur_ij_offset + (even + 2) * offset];
+                        c[j] = data[cur_ij_offset + (even + 4) * offset];
+                        d[j] = data[cur_ij_offset + (even + 6) * offset];
+                    }
+                    svfloat64_t sum = svmul_n_f64_x(pg64, svadd_f64_x(pg64, svld1(pg64, b), svld1(pg64, c)), 9.0);
+                    sum = svsub_f64_x(pg64, sum, svld1(pg64, a));
+                    sum = svsub_f64_x(pg64, sum, svld1(pg64, d));
+                    sum = svmul_n_f64_x(pg64, sum, 0.0625);
+                    size_t start = cur_i + 1;
+                    quantize_double<CompMode>(sum, start, odd_data, odd_offset, odd_len, step, pg64, cur_tid);
+                }
+                i = vec_chunks * step;
+            } else {
+                for (; i + step + 2 < even_len; i += step) {
+                    T a[step], b[step], c[step], d[step];
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) {
+                        size_t even = (i + j) << 1;
+                        a[j] = data[cur_ij_offset + even * offset];
+                        b[j] = data[cur_ij_offset + (even + 2) * offset];
+                        c[j] = data[cur_ij_offset + (even + 4) * offset];
+                        d[j] = data[cur_ij_offset + (even + 6) * offset];
+                    }
+                    svfloat64_t sum = svmul_n_f64_x(pg64, svadd_f64_x(pg64, svld1(pg64, b), svld1(pg64, c)), 9.0);
+                    sum = svsub_f64_x(pg64, sum, svld1(pg64, a));
+                    sum = svsub_f64_x(pg64, sum, svld1(pg64, d));
+                    sum = svmul_n_f64_x(pg64, sum, 0.0625);
+                    size_t start = i + 1;
+                    quantize_double<CompMode>(sum, start, odd_data, odd_offset, odd_len, step, pg64, tid);
+                }
+            }
+        }
+        for (; i + 3 < even_len; ++i) {
+            size_t start = ((i << 1) + 3) * offset;
+            quantize_func(cur_ij_offset + start, data[cur_ij_offset + start],
+                          interp_cubic(data[cur_ij_offset + (i << 1) * offset],
+                                       data[cur_ij_offset + ((i << 1) + 2) * offset],
+                                       data[cur_ij_offset + ((i << 1) + 4) * offset],
+                                       data[cur_ij_offset + ((i << 1) + 6) * offset]), tid);
+        }
+        if (odd_len > 1) {
+            if (odd_len < even_len) {
+                T edge_pred = interp_quad_2(data[cur_ij_offset + ((even_len - 3) << 1) * offset],
+                                            data[cur_ij_offset + ((even_len - 2) << 1) * offset],
+                                            data[cur_ij_offset + ((even_len - 1) << 1) * offset]);
+                int last = 2 * odd_len - 1;
+                quantize_func(cur_ij_offset + last * offset, data[cur_ij_offset + last * offset], edge_pred, tid);
+            } else {
+                if (odd_len > 2) {
+                    T edge_pred = interp_quad_2(data[cur_ij_offset + ((even_len - 3) << 1) * offset],
+                                                data[cur_ij_offset + ((even_len - 2) << 1) * offset],
+                                                data[cur_ij_offset + ((even_len - 1) << 1) * offset]);
+                    int last = 2 * odd_len - 3;
+                    quantize_func(cur_ij_offset + last * offset, data[cur_ij_offset + last * offset], edge_pred, tid);
+                }
+                T edge_pred = interp_linear1(data[cur_ij_offset + ((even_len - 2) << 1) * offset],
+                                             data[cur_ij_offset + ((even_len - 1) << 1) * offset]);
+                int last = 2 * odd_len - 1;
+                quantize_func(cur_ij_offset + last * offset, data[cur_ij_offset + last * offset], edge_pred, tid);
+            }
+        }
+    }
+
     template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_linear_and_quantize_1D(const T * buf, const size_t &len, T* data, 
+    ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_linear_and_quantize_1D(const T * buf, const size_t &len, T* data,
         size_t&  offset, size_t& cur_ij_offset, int& tid, QuantizeFunc &&quantize_func) {
         if(len == 1)
             return;
@@ -1287,14 +1518,13 @@ namespace SZ3 {
                         else
                             quantizer.save_unpred2(ori[j], tid);
                     }
-                    svst1(pg, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
+                    svst1h_s32(pg, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
                     local_quant_index[tid].value += j;
                 }
                 else if constexpr (CompMode == COMPMODE::DECOMP) { // decomp
-                    svint32_t quant_sve_i = svld1_s32(pg, local_quant_inds[tid] + local_quant_index[tid].value);
+                    svint32_t quant_sve_i = svld1sh_s32(pg, local_quant_inds[tid] + local_quant_index[tid].value);
                     int quant_vals[step];
                     svst1(pg, quant_vals, quant_sve_i);
-                    quant_sve_i = svsub_n_s32_x(pg, quant_sve_i, radius);
                     
                     svfloat64_t decompressed_even_f64 = svcvt_f64_s32_x(pg64, quant_sve_i);
                     svfloat64_t decompressed_odd_f64  = svcvtlt_f64_f32_x(pg64, svcvt_f32_s32_x(pg, quant_sve_i));
@@ -1361,14 +1591,13 @@ namespace SZ3 {
                         else
                             quantizer.save_unpred2(ori[j], tid);
                     }
-                    svst1w_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
+                    svst1h_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
                     local_quant_index[tid].value += j;
                 }
                 else if constexpr (CompMode == COMPMODE::DECOMP) { // decomp
-                    svint64_t quant_sve_i = svld1sw_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value);
+                    svint64_t quant_sve_i = svld1sh_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value);
                     int quant_vals[step];
                     svst1w_s64(pg64, quant_vals, quant_sve_i);
-                    quant_sve_i = svsub_n_s64_x(pg64, quant_sve_i, radius);
 
                     svfloat64_t decompressed = svmla_f64_x(pg64, sum, 
                             svcvt_f64_s64_x(pg64, quant_sve_i), svdup_f64(real_ebx2));
@@ -1464,14 +1693,13 @@ namespace SZ3 {
                         else
                             quantizer.save_unpred2(ori[j], tid);
                     }
-                    svst1(pg, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
+                    svst1h_s32(pg, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
                     local_quant_index[tid].value += j;
                 }
                 else if constexpr (CompMode == COMPMODE::DECOMP) { // decomp
-                    svint32_t quant_sve_i = svld1_s32(pg, local_quant_inds[tid] + local_quant_index[tid].value);
+                    svint32_t quant_sve_i = svld1sh_s32(pg, local_quant_inds[tid] + local_quant_index[tid].value);
                     int quant_vals[step];
                     svst1(pg, quant_vals, quant_sve_i);
-                    quant_sve_i = svsub_n_s32_x(pg, quant_sve_i, radius);
                     
                     svfloat64_t decompressed_even_f64 = svcvt_f64_s32_x(pg64, quant_sve_i);
                     svfloat64_t decompressed_odd_f64  = svcvtlt_f64_f32_x(pg64, svcvt_f32_s32_x(pg, quant_sve_i));
@@ -1544,14 +1772,13 @@ namespace SZ3 {
                         else
                             quantizer.save_unpred2(ori[j], tid);
                     }
-                    svst1w_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
+                    svst1h_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
                     local_quant_index[tid].value += j;
                 }
                 else if constexpr (CompMode == COMPMODE::DECOMP) { // decomp
-                    svint64_t quant_sve_i = svld1sw_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value);
+                    svint64_t quant_sve_i = svld1sh_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value);
                     int quant_vals[step];
                     svst1w_s64(pg64, quant_vals, quant_sve_i);
-                    quant_sve_i = svsub_n_s64_x(pg64, quant_sve_i, radius);
 
                     svfloat64_t decompressed = svmla_f64_x(pg64, sum, 
                             svcvt_f64_s64_x(pg64, quant_sve_i), svdup_f64(real_ebx2));
@@ -1866,10 +2093,9 @@ namespace SZ3 {
             quant_sve = svcvtnt_f32_f64_x(quant_sve, pg64, quant_odd_f64);
 
             svfloat32_t err_dequan = svsub_f32_x(pg, decompressed, ori_sve);
-            quant_sve = svadd_n_f32_x(pg, quant_sve, radius);
 
             pg_in_range = svand_b_z(pg, svcmpge_n_f32(pg, err_dequan, -real_eb), svcmple_n_f32(pg, err_dequan, real_eb));
-            quant_sve = svsel_f32(pg_in_range, quant_sve, svdup_n_f32(0.0));
+            quant_sve = svsel_f32(pg_in_range, quant_sve, svdup_n_f32(-(float)radius));
     }
 
     template <class T, uint N, class QuantizerOMP>
@@ -1888,9 +2114,8 @@ namespace SZ3 {
         svst1_f64(pg64, tmp, decompressed);
         svfloat64_t err_dequan = svsub_f64_x(pg64, decompressed, ori_sve);
 
-        quant_sve = svadd_n_f64_x(pg64, quant_sve, radius);
         pg_in_range = svand_b_z(pg64, svcmpge_n_f64(pg64, err_dequan, -real_eb), svcmple_n_f64(pg64, err_dequan, real_eb));
-        quant_sve = svsel_f64(pg_in_range, quant_sve, svdup_n_f64(0.0));
+        quant_sve = svsel_f64(pg_in_range, quant_sve, svdup_n_f64(-(double)radius));
     }
 
     template <class T, uint N, class QuantizerOMP>
@@ -1943,10 +2168,9 @@ namespace SZ3 {
             quant_sve = svcvtnt_f32_f64_x(quant_sve, pg64, quant_odd_f64);
 
             svfloat32_t err_dequan = svsub_f32_x(pg, decompressed, ori_sve);
-            quant_sve = svadd_n_f32_x(pg, quant_sve, radius);
 
             pg_in_range = svand_b_z(pg, svcmpge_n_f32(pg, err_dequan, -real_eb), svcmple_n_f32(pg, err_dequan, real_eb));
-            quant_sve = svsel_f32(pg_in_range, quant_sve, svdup_n_f32(0.0));
+            quant_sve = svsel_f32(pg_in_range, quant_sve, svdup_n_f32(-(float)radius));
 
             svint32_t quant_sve_i = svcvt_s32_f32_z(pg, quant_sve);
             svst1(pg, quant_vals, quant_sve_i);
@@ -1960,14 +2184,13 @@ namespace SZ3 {
                     quantizer.save_unpred2(ori[j], tid);
             }
 
-            svst1(pg, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
+            svst1h_s32(pg, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
             local_quant_index[tid].value += j;
         }
         else if constexpr (CompMode == COMPMODE::DECOMP) { // decomp
-            svint32_t quant_sve_i = svld1_s32(pg, local_quant_inds[tid] + local_quant_index[tid].value);
+            svint32_t quant_sve_i = svld1sh_s32(pg, local_quant_inds[tid] + local_quant_index[tid].value);
             int quant_vals[step];
             svst1(pg, quant_vals, quant_sve_i);
-            quant_sve_i = svsub_n_s32_x(pg, quant_sve_i, radius);
             
             svfloat64_t decompressed_even_f64 = svcvt_f64_s32_x(pg64, quant_sve_i);
             svfloat64_t decompressed_odd_f64  = svcvtlt_f64_f32_x(pg64, svcvt_f32_s32_x(pg, quant_sve_i));
@@ -2024,9 +2247,8 @@ namespace SZ3 {
             svst1_f64(pg64, tmp, decompressed);
             svfloat64_t err_dequan = svsub_f64_x(pg64, decompressed, ori_sve);
 
-            quant_sve = svadd_n_f64_x(pg64, quant_sve, radius);
             pg_in_range = svand_b_z(pg64, svcmpge_n_f64(pg64, err_dequan, -real_eb), svcmple_n_f64(pg64, err_dequan, real_eb));
-            quant_sve = svsel_f64(pg_in_range, quant_sve, svdup_n_f64(0.0));
+            quant_sve = svsel_f64(pg_in_range, quant_sve, svdup_n_f64(-(double)radius));
 
             
             svint64_t quant_sve_i = svcvt_s64_f64_x(pg64, quant_sve);
@@ -2041,16 +2263,17 @@ namespace SZ3 {
                 else
                     quantizer.save_unpred2(ori[j], tid);
             }
-            svst1w_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
+            svst1h_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value, quant_sve_i);
             local_quant_index[tid].value += j;
         }
         else if constexpr (CompMode == COMPMODE::DECOMP) { 
-            svint64_t quant_sve_i = svld1sw_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value);
+            svint64_t quant_sve_i = svld1sh_s64(pg64, local_quant_inds[tid] + local_quant_index[tid].value);
             int quant_vals[step];
             svst1w_s64(pg64, quant_vals, quant_sve_i);
-            quant_sve_i = svsub_n_s64_x(pg64, quant_sve_i, radius);
+            // codes are stored signed (no +radius offset), so use them directly — matches
+            // the COMP store and the quantize_float path. (Removed a leftover -radius shift.)
 
-            svfloat64_t decompressed = svmla_f64_x(pg64, sum, 
+            svfloat64_t decompressed = svmla_f64_x(pg64, sum,
                     svcvt_f64_s64_x(pg64, quant_sve_i), svdup_f64(real_ebx2));
             T tmp[step];
             svst1_f64(pg64, tmp, decompressed);

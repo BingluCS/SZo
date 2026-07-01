@@ -1296,12 +1296,16 @@ template <COMPMODE CompMode, class QuantizeFunc>
         }
 #endif
         
-        if constexpr (N == 1) {  // old API
-#ifdef __AVX2__
-            return interpolation_1d_simd<CompMode>(data, begin[0], end[0], stride, interp_func, quantize_func);
-#else
-            return interpolation_1d(data, begin[0], end[0], stride, interp_func, quantize_func);
-#endif
+        if constexpr (N == 1) {  // mirror the N==2 structure below
+            if constexpr (Tuning == TUNING::DISABLED) {
+                // All builds go through the SIMD 1D path (interpolation_1d_simd ->
+                // interp_*_and_quantize_1D_line, with scalar/AVX2/SVE2 variants). This is
+                // the cross-ISA bit-exact path. The legacy scalar interpolation_1d diverged
+                // from it at boundaries (different edge prediction).
+                return interpolation_1d_simd<CompMode>(data, begin[0], end[0], stride, interp_func, quantize_func);
+            } else {  // single-thread tuning keeps the legacy API (as N==2 does)
+                return interpolation_1d(data, begin[0], end[0], stride, interp_func, quantize_func);
+            }
         } else if constexpr (N == 2) {  // old API
             double predict_error = 0;
             size_t stride2x = stride * 2;

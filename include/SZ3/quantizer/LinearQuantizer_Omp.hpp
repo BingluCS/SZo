@@ -130,6 +130,15 @@ class LinearQuantizerOMP : public concepts::QuantizerOMPInterface<T, int> {
             }
         #endif
     }
+    // Reset per-thread unpred READ cursors to 0 before decompression. Needed because
+    // save_unpred2 (compress) and recover_unpred2 (decompress) share local_unpred_idx as
+    // their cursor; after compress it points past the last written outlier. (The non-OMP
+    // quantizer avoids this by using a separate decompress-only `index`.)
+    ALWAYS_INLINE void reset_local_unpred_idx(int thread_count) {
+        #ifdef _OPENMP
+            for (int tid = 0; tid < thread_count; ++tid) local_unpred_idx[tid].value = 0;
+        #endif
+    }
     ALWAYS_INLINE T recover2(T pred, int quant_index, int tid) {
         if (quant_index != -this->radius) {                // int16: predictable unless escape (-this->radius); code 0 = zero error
             return recover_pred(pred, quant_index);
