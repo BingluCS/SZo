@@ -16,7 +16,6 @@ import numpy as np
 
 
 
-SZo_VERSION = "3.3.1"
 
 class BuildSZoExtension(_build_ext):
 
@@ -53,36 +52,45 @@ class BuildSZoExtension(_build_ext):
     def download_and_build_szo(self):
         build_temp = Path(self.build_temp).absolute()
         build_temp.mkdir(parents=True, exist_ok=True)
-        szo_dir = build_temp / "SZo"
-        
-        if (szo_dir / "build" / "include" / "SZo" / "version.hpp").exists():
-            print(f"SZo already built at: {szo_dir}")
-            return szo_dir
-        
-        if not szo_dir.exists():
-            print(f"Cloning SZo v{SZo_VERSION}...")
-            subprocess.run([
-                "git", "clone", "--depth", "1",
-                "--branch", f"v{SZo_VERSION}",
-                "--single-branch",
-                "https://github.com/szcompressor/SZo.git",
-                str(szo_dir)
-            ], check=True)
+
+        # Prefer the local SZo checkout when installing from source. This file
+        # lives at <SZo>/tools/pyszo/setup.py, so the repo root is two levels up.
+        # Using the local tree needs no network and picks up any local changes.
+        local_root = Path(__file__).resolve().parent.parent.parent
+        if (local_root / "CMakeLists.txt").exists() and (local_root / "include" / "SZo").is_dir():
+            szo_dir = local_root
+            print(f"Using local SZo source: {szo_dir}")
+        else:
+            # Fallback (e.g. an sdist with no source tree): fetch main from GitHub.
+            szo_dir = build_temp / "SZo"
+            if not (szo_dir / "include" / "SZo").is_dir():
+                if szo_dir.exists():
+                    shutil.rmtree(szo_dir)
+                print("Cloning SZo (main)...")
+                subprocess.run([
+                    "git", "clone", "--depth", "1",
+                    "https://github.com/BingluCS/SZo.git",
+                    str(szo_dir),
+                ], check=True)
 
         build_dir = szo_dir / "build"
+        if (build_dir / "include" / "SZo" / "version.hpp").exists():
+            print(f"SZo already built at: {build_dir}")
+            return szo_dir
+
         build_dir.mkdir(exist_ok=True)
-        
-        cmake_args = ["cmake"]
-        cmake_args.extend([
+        subprocess.run([
+            "cmake",
             "-DCMAKE_BUILD_TYPE=Release",
             "-DBUILD_TESTING=OFF",
             "-DBUILD_SZo_BINARY=OFF",
             "-DSZo_USE_BUNDLED_ZSTD=ON",
-            ".."
-        ])
-        subprocess.run(cmake_args, cwd=build_dir, check=True)
-        subprocess.run(["cmake", "--build", ".", "-j"], cwd=build_dir, check=True)
-        print(f"Built SZo v{SZo_VERSION}")
+            "..",
+        ], cwd=build_dir, check=True)
+        # pyszo only needs the header-only SZo headers, the generated version.hpp
+        # (created at configure time) and the bundled zstd shared library.
+        subprocess.run(["cmake", "--build", ".", "--target", "zstd", "-j"], cwd=build_dir, check=True)
+        print(f"Built SZo deps at: {build_dir}")
         return szo_dir
 
 

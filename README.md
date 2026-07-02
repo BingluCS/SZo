@@ -54,7 +54,7 @@ free_buf(comp);
 * **AVX2/SVE2:** `SZOc` picks up the SIMD flags automatically when the project is configured with `-DENABLE_AVX2=ON` (or `-DENABLE_SVE2=ON`).
 
 ### Python API (pyszo)
-* `pip install pyszo`. [Source in `tools/pyszo`](https://github.com/BingluCS/SZo/tree/master/tools/pyszo).
+* `pip install pyszo`. [Source in `tools/pyszo`](https://github.com/BingluCS/SZo/tree/main/tools/pyszo).
 ```python
 import numpy as np
 from pyszo import sz, szoConfig, szoErrorBoundMode, szoAlgorithm

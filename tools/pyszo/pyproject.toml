@@ -39,8 +39,8 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/szcompressor/SZo"
-"Documentation" = "https://github.com/szcompressor/SZo/tree/master/tools/pyszo"
-"Source" = "https://github.com/szcompressor/SZo"
-"Bug Tracker" = "https://github.com/szcompressor/SZo/issues"
+"Homepage" = "https://github.com/BingluCS/SZo"
+"Documentation" = "https://github.com/BingluCS/SZo/tree/main/tools/pyszo"
+"Source" = "https://github.com/BingluCS/SZo"
+"Bug Tracker" = "https://github.com/BingluCS/SZo/issues"
 
