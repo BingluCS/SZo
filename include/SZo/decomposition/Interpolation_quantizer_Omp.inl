@@ -975,9 +975,12 @@ namespace SZo {
             const bool full_vector = start + step <= len;
             if (offset == 1 && full_vector) {
                 ori_avx = _mm256_loadu_ps(data + start);
+            } else if (full_vector) {
+                // strided but fully in-bounds: straight reads, no per-lane bound check
+                for (size_t j = 0; j < step; ++j) ori[j] = data[(start + j) * offset];
+                ori_avx = _mm256_loadu_ps(ori);
             } else {
-                // tail/strided: read only valid lanes, clamping past-end indices to the last
-                // valid element so we never read past the buffer (invalid lanes are masked below).
+                // tail: clamp past-end indices to the last valid element (avoid OOB read)
                 for (size_t j = 0; j < step; ++j) {
                     size_t idx = (start + j < len) ? (start + j) : (len - 1);
                     ori[j] = data[idx * offset];
@@ -1116,9 +1119,12 @@ namespace SZo {
             const bool full_vector = start + step <= len;
             if (offset == 1 && full_vector) {
                 ori_avx = _mm256_loadu_pd(data + start);
+            } else if (full_vector) {
+                // strided but fully in-bounds: straight reads, no per-lane bound check
+                for (size_t j = 0; j < step; ++j) ori[j] = data[(start + j) * offset];
+                ori_avx = _mm256_loadu_pd(ori);
             } else {
-                // tail/strided: clamp past-end indices to the last valid element (no OOB read;
-                // invalid lanes are masked below).
+                // tail: clamp past-end indices to the last valid element (avoid OOB read)
                 for (size_t j = 0; j < step; ++j) {
                     size_t idx = (start + j < len) ? (start + j) : (len - 1);
                     ori[j] = data[idx * offset];
@@ -2130,9 +2136,17 @@ namespace SZo {
             T ori[step];
             size_t base = start * offset;
 
-            #pragma unroll
-            for (size_t j = 0; j < step; ++j) {
-                ori[j] = data[base + j * offset];
+            if (start + step <= len) {
+                #pragma unroll
+                for (size_t j = 0; j < step; ++j) {
+                    ori[j] = data[base + j * offset];
+                }
+            } else {
+                // tail: clamp past-end indices to the last valid element (avoid OOB read)
+                for (size_t j = 0; j < step; ++j) {
+                    size_t idx = (start + j < len) ? (start + j) : (len - 1);
+                    ori[j] = data[idx * offset];
+                }
             }
 
             svfloat32_t ori_sve = svld1(pg, ori);
@@ -2230,9 +2244,17 @@ namespace SZo {
             T ori[step];
             size_t base = start * offset;
 
-            #pragma unroll
-            for (size_t j = 0; j < step; ++j) {
-                ori[j] = data[base + j * offset];
+            if (start + step <= len) {
+                #pragma unroll
+                for (size_t j = 0; j < step; ++j) {
+                    ori[j] = data[base + j * offset];
+                }
+            } else {
+                // tail: clamp past-end indices to the last valid element (avoid OOB read)
+                for (size_t j = 0; j < step; ++j) {
+                    size_t idx = (start + j < len) ? (start + j) : (len - 1);
+                    ori[j] = data[idx * offset];
+                }
             }
 
             svfloat64_t ori_sve = svld1(pg64, ori);
