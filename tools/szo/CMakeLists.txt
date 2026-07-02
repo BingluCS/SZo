@@ -1,4 +1,4 @@
-set(SZO_SOURCE_FILE "${CMAKE_SOURCE_DIR}/tools/sz3/szo.cpp")
+set(SZO_SOURCE_FILE "${CMAKE_SOURCE_DIR}/tools/szo/szo.cpp")
 set(SZO_TARGET_NAME szo)
 
 # Vendored standalone FSE (entropy coder) — compiled into szo directly so the

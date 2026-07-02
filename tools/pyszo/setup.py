@@ -19,15 +19,15 @@ SZo_VERSION = "3.3.1"
 class BuildSZoExtension(_build_ext):
 
     def run(self):
-        sz3_dir = self.download_and_build_sz3()
+        szo_dir = self.download_and_build_szo()
 
         for ext in self.extensions:
-            ext.include_dirs.insert(0, str(sz3_dir / "include"))
-            ext.include_dirs.insert(0, str(sz3_dir / "build" / "include"))
-            ext.include_dirs.append(str(sz3_dir / "build" / "_deps" / "zstdfetched-src" / "lib"))
-            ext.library_dirs.append(str(sz3_dir / "build" / "tools" / "zstd"))
-            ext.library_dirs.append(str(sz3_dir / "build" / "tools" / "zstd" / "Release"))
-            ext.library_dirs.append(str(sz3_dir / "build" / "tools" / "zstd" / "Debug"))
+            ext.include_dirs.insert(0, str(szo_dir / "include"))
+            ext.include_dirs.insert(0, str(szo_dir / "build" / "include"))
+            ext.include_dirs.append(str(szo_dir / "build" / "_deps" / "zstdfetched-src" / "lib"))
+            ext.library_dirs.append(str(szo_dir / "build" / "tools" / "zstd"))
+            ext.library_dirs.append(str(szo_dir / "build" / "tools" / "zstd" / "Release"))
+            ext.library_dirs.append(str(szo_dir / "build" / "tools" / "zstd" / "Debug"))
 
         super().run()
 
@@ -38,7 +38,7 @@ class BuildSZoExtension(_build_ext):
         else:
             zstd_lib_name = "libzstd.so"
 
-        zstd_base = sz3_dir / "build" / "tools" / "zstd"
+        zstd_base = szo_dir / "build" / "tools" / "zstd"
         package_dir = Path(self.build_lib) / "pyszo"
         if package_dir.exists():
             for subdir in ["", "Release", "Debug"]:
@@ -48,26 +48,26 @@ class BuildSZoExtension(_build_ext):
                     print(f"Copied {zstd_lib.name} to package")
                     break
 
-    def download_and_build_sz3(self):
+    def download_and_build_szo(self):
         build_temp = Path(self.build_temp).absolute()
         build_temp.mkdir(parents=True, exist_ok=True)
-        sz3_dir = build_temp / "SZo"
+        szo_dir = build_temp / "SZo"
         
-        if (sz3_dir / "build" / "include" / "SZo" / "version.hpp").exists():
-            print(f"SZo already built at: {sz3_dir}")
-            return sz3_dir
+        if (szo_dir / "build" / "include" / "SZo" / "version.hpp").exists():
+            print(f"SZo already built at: {szo_dir}")
+            return szo_dir
         
-        if not sz3_dir.exists():
+        if not szo_dir.exists():
             print(f"Cloning SZo v{SZo_VERSION}...")
             subprocess.run([
                 "git", "clone", "--depth", "1",
                 "--branch", f"v{SZo_VERSION}",
                 "--single-branch",
                 "https://github.com/szcompressor/SZo.git",
-                str(sz3_dir)
+                str(szo_dir)
             ], check=True)
 
-        build_dir = sz3_dir / "build"
+        build_dir = szo_dir / "build"
         build_dir.mkdir(exist_ok=True)
         
         cmake_args = ["cmake"]
@@ -81,7 +81,7 @@ class BuildSZoExtension(_build_ext):
         subprocess.run(cmake_args, cwd=build_dir, check=True)
         subprocess.run(["cmake", "--build", ".", "-j"], cwd=build_dir, check=True)
         print(f"Built SZo v{SZo_VERSION}")
-        return sz3_dir
+        return szo_dir
 
 
 

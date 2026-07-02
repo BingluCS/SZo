@@ -21,8 +21,8 @@ cdef extern from "SZo/utils/Config.hpp" namespace "SZo":
         size_t size_est() const
 
         # Basic configuration
-        uint32_t sz3MagicNumber
-        uint32_t sz3DataVer
+        uint32_t szoMagicNumber
+        uint32_t szoDataVer
         char N
         vector[size_t] dims
         size_t num

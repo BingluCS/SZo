@@ -11,7 +11,7 @@
  * "include/SZo/api/impl/SZAlgoNopred.hpp"
  * 3. Add the corresponding code in "include/SZo/api/impl/SZDispatcher.hpp" to dispatch the new compressor.
  * 4. When executing the SZo executable, use -c to specify the config file. The config file should use the new ALGO.
- *  Example config file is "tools/sz3/sz3.config".
+ *  Example config file is "tools/szo/szo.config".
  */
 
 #include "SZo/api/sz.hpp"

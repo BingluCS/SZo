@@ -144,8 +144,8 @@ static herr_t H5Z_szo_set_local(hid_t dcpl_id, hid_t type_id, hid_t chunk_space_
     conf.setDims(std::begin(dims), std::end(dims));
     //  need to update magic number and data version,
     //  as the config may be from cd_values passed by users
-    conf.sz3MagicNumber = SZo_MAGIC_NUMBER;
-    conf.sz3DataVer = versionInt(SZo_DATA_VER);
+    conf.szoMagicNumber = SZo_MAGIC_NUMBER;
+    conf.szoDataVer = versionInt(SZo_DATA_VER);
 
     set_SZo_conf_to_H5(dcpl_id, conf);
     return 1;

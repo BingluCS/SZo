@@ -753,16 +753,20 @@ namespace SZo {
             static constexpr size_t step = AVX_256_parallelism;
             const __m256 factor = _mm256_set1_ps(0.5f);
 
-            for (; i < len; i += step) {
+            for (; i + step <= len; i += step) {
                 __m256 sum = _mm256_mul_ps(_mm256_add_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i)), factor);
-                quantize_float<CompMode, step>(sum, i, data, offset, len);
+                quantize_float<CompMode, step, true>(sum, i, data, offset, len);
+            }
+            if (i < len) {
+                __m256 sum = _mm256_mul_ps(_mm256_add_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i)), factor);
+                quantize_float<CompMode, step, false>(sum, i, data, offset, len);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
             static constexpr size_t step = AVX_256_parallelism;
             const __m256d factor = _mm256_set1_pd(0.5);
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 __m256d va = _mm256_loadu_pd(a + i);
                 __m256d vb = _mm256_loadu_pd(b + i);
 
@@ -770,7 +774,17 @@ namespace SZo {
                 sum = _mm256_mul_pd(sum, factor);
                 // _mm256_storeu_pd(p + i, sum);
                 // size_t start = i;
-                quantize_double<CompMode, step>(sum, i, data, offset, len);
+                quantize_double<CompMode, step, true>(sum, i, data, offset, len);
+            }
+            if (i < len) {
+                __m256d va = _mm256_loadu_pd(a + i);
+                __m256d vb = _mm256_loadu_pd(b + i);
+
+                __m256d sum = _mm256_add_pd(va, vb);
+                sum = _mm256_mul_pd(sum, factor);
+                // _mm256_storeu_pd(p + i, sum);
+                // size_t start = i;
+                quantize_double<CompMode, step, false>(sum, i, data, offset, len);
             }
         }
 
@@ -788,7 +802,7 @@ namespace SZo {
             const __m256 nine  = _mm256_set1_ps(9.0f);
             const __m256 factor = _mm256_set1_ps(1.0f / 16.0f);
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 __m256 va = _mm256_loadu_ps(a + i);
                 __m256 vb = _mm256_loadu_ps(b + i);
                 __m256 vc = _mm256_loadu_ps(c + i);
@@ -801,7 +815,22 @@ namespace SZo {
                 sum = _mm256_mul_ps(sum, factor);
 
                 // _mm256_storeu_ps(p + i, sum);
-                quantize_float<CompMode, step>(sum, i, data, offset, len);
+                quantize_float<CompMode, step, true>(sum, i, data, offset, len);
+            }
+            if (i < len) {
+                __m256 va = _mm256_loadu_ps(a + i);
+                __m256 vb = _mm256_loadu_ps(b + i);
+                __m256 vc = _mm256_loadu_ps(c + i);
+                __m256 vd = _mm256_loadu_ps(d + i);
+
+                 __m256 sum = _mm256_add_ps(vb, vc);
+                 sum = _mm256_mul_ps(sum, nine);
+                 sum = _mm256_sub_ps(sum, va);
+                sum = _mm256_sub_ps(sum, vd);
+                sum = _mm256_mul_ps(sum, factor);
+
+                // _mm256_storeu_ps(p + i, sum);
+                quantize_float<CompMode, step, false>(sum, i, data, offset, len);
             }
 
         }
@@ -810,7 +839,7 @@ namespace SZo {
             const __m256d nine  = _mm256_set1_pd(9.0);
             const __m256d factor = _mm256_set1_pd(1.0 / 16.0);
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 __m256d va = _mm256_loadu_pd(a + i);
                 __m256d vb = _mm256_loadu_pd(b + i);
                 __m256d vc = _mm256_loadu_pd(c + i);
@@ -823,7 +852,22 @@ namespace SZo {
 
                 sum = _mm256_mul_pd(sum, factor);    
                 // _mm256_storeu_pd(p + i, sum);
-                quantize_double<CompMode, step>(sum, i, data, offset, len);
+                quantize_double<CompMode, step, true>(sum, i, data, offset, len);
+            }
+            if (i < len) {
+                __m256d va = _mm256_loadu_pd(a + i);
+                __m256d vb = _mm256_loadu_pd(b + i);
+                __m256d vc = _mm256_loadu_pd(c + i);
+                __m256d vd = _mm256_loadu_pd(d + i);
+
+                __m256d sum = _mm256_add_pd(vb, vc); 
+                 sum = _mm256_mul_pd(sum, nine); 
+                 sum = _mm256_sub_pd(sum, va); 
+                sum = _mm256_sub_pd(sum, vd); 
+
+                sum = _mm256_mul_pd(sum, factor);    
+                // _mm256_storeu_pd(p + i, sum);
+                quantize_double<CompMode, step, false>(sum, i, data, offset, len);
             }
         }
 
@@ -838,18 +882,27 @@ namespace SZo {
 
         if constexpr (std::is_same_v<T, float>) {
             static constexpr size_t step = AVX_256_parallelism;
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 __m256 sum = _mm256_loadu_ps(a + i);
                 // _mm256_storeu_ps(p + i, sum);
-                quantize_float<CompMode, step>(sum, i, data, offset, len);
+                quantize_float<CompMode, step, true>(sum, i, data, offset, len);
+            }
+            if (i < len) {
+                __m256 sum = _mm256_loadu_ps(a + i);
+                // _mm256_storeu_ps(p + i, sum);
+                quantize_float<CompMode, step, false>(sum, i, data, offset, len);
             }
             
         }
         else if constexpr (std::is_same_v<T, double>) {
             static constexpr size_t step = AVX_256_parallelism;
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 __m256d sum = _mm256_loadu_pd(a + i); 
-                quantize_double<CompMode, step>(sum, i, data, offset, len);
+                quantize_double<CompMode, step, true>(sum, i, data, offset, len);
+            }
+            if (i < len) {
+                __m256d sum = _mm256_loadu_pd(a + i); 
+                quantize_double<CompMode, step, false>(sum, i, data, offset, len);
             }
         }
     }
@@ -864,24 +917,38 @@ namespace SZo {
             static constexpr size_t step = AVX_256_parallelism;
             const __m256 half = _mm256_set1_ps(0.5f);
             const __m256 threehalf = _mm256_set1_ps(1.5f);
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 __m256 vb = _mm256_loadu_ps(b + i);
                 __m256 va = _mm256_loadu_ps(a + i);
                 vb = _mm256_mul_ps(vb, threehalf);              // 1.5*b
                 __m256 sum = _mm256_fnmadd_ps(half, va, vb);    // 1.5*b - 0.5*a  (== interp_linear1, fused)
-                quantize_float<CompMode, step>(sum, i, data, offset, len);
+                quantize_float<CompMode, step, true>(sum, i, data, offset, len);
+            }
+            if (i < len) {
+                __m256 vb = _mm256_loadu_ps(b + i);
+                __m256 va = _mm256_loadu_ps(a + i);
+                vb = _mm256_mul_ps(vb, threehalf);              // 1.5*b
+                __m256 sum = _mm256_fnmadd_ps(half, va, vb);    // 1.5*b - 0.5*a  (== interp_linear1, fused)
+                quantize_float<CompMode, step, false>(sum, i, data, offset, len);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
             static constexpr size_t step = AVX_256_parallelism;
             const __m256d half = _mm256_set1_pd(0.5);
             const __m256d threehalf = _mm256_set1_pd(1.5);
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 __m256d va = _mm256_loadu_pd(a + i);
                 __m256d vb = _mm256_loadu_pd(b + i);
                 vb = _mm256_mul_pd(vb, threehalf);              // 1.5*b
                 __m256d sum = _mm256_fnmadd_pd(half, va, vb);   // 1.5*b - 0.5*a  (== interp_linear1, fused)
-                quantize_double<CompMode, step>(sum, i, data, offset, len);
+                quantize_double<CompMode, step, true>(sum, i, data, offset, len);
+            }
+            if (i < len) {
+                __m256d va = _mm256_loadu_pd(a + i);
+                __m256d vb = _mm256_loadu_pd(b + i);
+                vb = _mm256_mul_pd(vb, threehalf);              // 1.5*b
+                __m256d sum = _mm256_fnmadd_pd(half, va, vb);   // 1.5*b - 0.5*a  (== interp_linear1, fused)
+                quantize_double<CompMode, step, false>(sum, i, data, offset, len);
             }
         }
     }
@@ -897,14 +964,23 @@ namespace SZo {
             const __m256 six = _mm256_set1_ps(6.0f);
             const __m256 three = _mm256_set1_ps(3.0f);
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 __m256 va = _mm256_loadu_ps(a + i);
                 __m256 vb = _mm256_loadu_ps(b + i);
                 __m256 vc = _mm256_loadu_ps(c + i);
                 vb = _mm256_fmsub_ps(vb, six, vc);           // 6*b - c
                 __m256 sum = _mm256_fmadd_ps(va, three, vb); // 3*a + (6b-c)  (fully fused)
                 sum = _mm256_mul_ps(sum, factor);            // *0.125
-                quantize_float<CompMode, step>(sum, i, data, offset, len);
+                quantize_float<CompMode, step, true>(sum, i, data, offset, len);
+            }
+            if (i < len) {
+                __m256 va = _mm256_loadu_ps(a + i);
+                __m256 vb = _mm256_loadu_ps(b + i);
+                __m256 vc = _mm256_loadu_ps(c + i);
+                vb = _mm256_fmsub_ps(vb, six, vc);           // 6*b - c
+                __m256 sum = _mm256_fmadd_ps(va, three, vb); // 3*a + (6b-c)  (fully fused)
+                sum = _mm256_mul_ps(sum, factor);            // *0.125
+                quantize_float<CompMode, step, false>(sum, i, data, offset, len);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
@@ -913,14 +989,23 @@ namespace SZo {
             const __m256d six = _mm256_set1_pd(6.0);
             const __m256d three = _mm256_set1_pd(3.0);
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 __m256d va = _mm256_loadu_pd(a + i);
                 __m256d vb = _mm256_loadu_pd(b + i);
                 __m256d vc = _mm256_loadu_pd(c + i);
                 vb = _mm256_fmsub_pd(vb, six, vc);            // 6*b - c
                 __m256d sum = _mm256_fmadd_pd(va, three, vb); // 3*a + (6b-c)  (fully fused)
                 sum = _mm256_mul_pd(sum, factor);             // *0.125
-                quantize_double<CompMode, step>(sum, i, data, offset, len);
+                quantize_double<CompMode, step, true>(sum, i, data, offset, len);
+            }
+            if (i < len) {
+                __m256d va = _mm256_loadu_pd(a + i);
+                __m256d vb = _mm256_loadu_pd(b + i);
+                __m256d vc = _mm256_loadu_pd(c + i);
+                vb = _mm256_fmsub_pd(vb, six, vc);            // 6*b - c
+                __m256d sum = _mm256_fmadd_pd(va, three, vb); // 3*a + (6b-c)  (fully fused)
+                sum = _mm256_mul_pd(sum, factor);             // *0.125
+                quantize_double<CompMode, step, false>(sum, i, data, offset, len);
             }
         }
       
@@ -937,14 +1022,23 @@ namespace SZo {
             const __m256 six = _mm256_set1_ps(6.0f);
             const __m256 three = _mm256_set1_ps(3.0f);
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 __m256 va = _mm256_loadu_ps(a + i);
                 __m256 vc = _mm256_loadu_ps(c + i);
                 __m256 vb = _mm256_loadu_ps(b + i);
                 vb = _mm256_fmsub_ps(vb, six, va);           // 6*b - a
                 __m256 sum = _mm256_fmadd_ps(vc, three, vb); // 3*c + (6b-a)  (fully fused)
                 sum = _mm256_mul_ps(sum, factor);            // *0.125
-                quantize_float<CompMode, step>(sum, i, data, offset, len);
+                quantize_float<CompMode, step, true>(sum, i, data, offset, len);
+            }
+            if (i < len) {
+                __m256 va = _mm256_loadu_ps(a + i);
+                __m256 vc = _mm256_loadu_ps(c + i);
+                __m256 vb = _mm256_loadu_ps(b + i);
+                vb = _mm256_fmsub_ps(vb, six, va);           // 6*b - a
+                __m256 sum = _mm256_fmadd_ps(vc, three, vb); // 3*c + (6b-a)  (fully fused)
+                sum = _mm256_mul_ps(sum, factor);            // *0.125
+                quantize_float<CompMode, step, false>(sum, i, data, offset, len);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
@@ -953,14 +1047,23 @@ namespace SZo {
             const __m256d six = _mm256_set1_pd(6.0);
             const __m256d three = _mm256_set1_pd(3.0);
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 __m256d vc = _mm256_loadu_pd(c + i);
                 __m256d va = _mm256_loadu_pd(a + i);
                 __m256d vb = _mm256_loadu_pd(b + i);
                 vb = _mm256_fmsub_pd(vb, six, va);            // 6*b - a
                 __m256d sum = _mm256_fmadd_pd(vc, three, vb); // 3*c + (6b-a)  (fully fused)
                 sum = _mm256_mul_pd(sum, factor);             // *0.125
-                quantize_double<CompMode, step>(sum, i, data, offset, len);
+                quantize_double<CompMode, step, true>(sum, i, data, offset, len);
+            }
+            if (i < len) {
+                __m256d vc = _mm256_loadu_pd(c + i);
+                __m256d va = _mm256_loadu_pd(a + i);
+                __m256d vb = _mm256_loadu_pd(b + i);
+                vb = _mm256_fmsub_pd(vb, six, va);            // 6*b - a
+                __m256d sum = _mm256_fmadd_pd(vc, three, vb); // 3*c + (6b-a)  (fully fused)
+                sum = _mm256_mul_pd(sum, factor);             // *0.125
+                quantize_double<CompMode, step, false>(sum, i, data, offset, len);
             }
         }
       
@@ -1035,18 +1138,18 @@ namespace SZo {
     }
     
     template <TUNING Tuning, class T, uint N, class Quantizer>
-    template <COMPMODE CompMode, int step, typename U, typename>
+    template <COMPMODE CompMode, int step, bool FullOnly, typename U, typename>
     ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::quantize_float (__m256& sum, size_t& start, T*& data, size_t& offset, size_t& len) {
         if constexpr (CompMode == COMPMODE::COMP) {
             T ori[8];
             __m256 ori_avx;
-            const bool full_vector = start + step <= len;
-            if (offset == 1 && full_vector) {
-                ori_avx = _mm256_loadu_ps(data + start);
-            } else if (full_vector) {
-                // strided but fully in-bounds: straight reads, no per-lane bound check
-                for (size_t j = 0; j < step; ++j) ori[j] = data[(start + j) * offset];
-                ori_avx = _mm256_loadu_ps(ori);
+            if constexpr (FullOnly) {
+                // caller guarantees a full chunk: read straight, skip the per-lane tail routing
+                if (offset == 1) ori_avx = _mm256_loadu_ps(data + start);
+                else {
+                    for (size_t j = 0; j < step; ++j) ori[j] = data[(start + j) * offset];
+                    ori_avx = _mm256_loadu_ps(ori);
+                }
             } else {
                 // tail: clamp past-end indices to the last valid element (avoid OOB read)
                 for (size_t j = 0; j < step; ++j) {
@@ -1101,13 +1204,18 @@ namespace SZo {
             __m256i quant_avx_i = _mm256_cvtps_epi32(quant_avx);
 
             size_t processed = 0;
-            if (offset == 1 && full_vector) {
+            __m256 out = _mm256_blendv_ps(decompressed, ori_avx, esc_mask);  // escape lane -> keep original
+            if constexpr (FullOnly) {
                 processed = step;
-                __m256 out = _mm256_blendv_ps(decompressed, ori_avx, esc_mask);  // escape lane -> keep original
-                _mm256_storeu_ps(data + start, out);
                 unsigned esc = static_cast<unsigned>(_mm256_movemask_ps(esc_mask)) & ((1u << step) - 1);
-                if (esc) {
-                    _mm256_storeu_ps(ori, ori_avx);
+                if (offset == 1) {
+                    _mm256_storeu_ps(data + start, out);
+                    if (esc) _mm256_storeu_ps(ori, ori_avx);   // contiguous read left ori[] unfilled
+                } else {
+                    float tmp[8];
+                    _mm256_storeu_ps(tmp, out);
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) data[(start + j) * offset] = tmp[j];
                 }
                 while (esc) {
                     int k = __builtin_ctz(esc);
@@ -1116,14 +1224,13 @@ namespace SZo {
                 }
             } else {
                 float tmp[8];
-                _mm256_storeu_ps(tmp, decompressed);
+                _mm256_storeu_ps(tmp, out);
                 #pragma unroll
                 for ( ; processed < step && start + processed < len; ++processed)
                     data[(start + processed) * offset] = tmp[processed];
                 unsigned esc = static_cast<unsigned>(_mm256_movemask_ps(esc_mask)) & ((1u << processed) - 1);
                 while (esc) {
                     int k = __builtin_ctz(esc);
-                    data[(start + k) * offset] = ori[k];
                     quantizer.force_save_unpred(ori[k]);
                     esc &= esc - 1;
                 }
@@ -1144,17 +1251,21 @@ namespace SZo {
                 _mm256_castps128_ps256(_mm256_cvtpd_ps(decompressed_low)),
                 _mm256_cvtpd_ps(decompressed_high), 1);
             
-            const bool full_vector = start + step <= len;
             size_t processed = 0;
-            if (offset == 1 && full_vector) {
+            unsigned esc_all = static_cast<unsigned>(_mm256_movemask_ps(_mm256_castsi256_ps(
+                                   _mm256_cmpeq_epi32(quant_avx_i, _mm256_set1_epi32(-32768)))));
+            if constexpr (FullOnly) {
                 processed = step;
-                _mm256_storeu_ps(data + start, decompressed);
-                unsigned esc = static_cast<unsigned>(_mm256_movemask_ps(_mm256_castsi256_ps(
-                                   _mm256_cmpeq_epi32(quant_avx_i, _mm256_set1_epi32(-32768))))) & ((1u << step) - 1);
-                while (esc) {
-                    int k = __builtin_ctz(esc);
-                    data[start + k] = quantizer.recover_unpred();
-                    esc &= esc - 1;
+                unsigned esc = esc_all & ((1u << step) - 1);
+                if (offset == 1) {
+                    _mm256_storeu_ps(data + start, decompressed);
+                    while (esc) { int k = __builtin_ctz(esc); data[start + k] = quantizer.recover_unpred(); esc &= esc - 1; }
+                } else {
+                    float tmp[8];
+                    _mm256_storeu_ps(tmp, decompressed);
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) data[(start + j) * offset] = tmp[j];
+                    while (esc) { int k = __builtin_ctz(esc); data[(start + k) * offset] = quantizer.recover_unpred(); esc &= esc - 1; }
                 }
             } else {
                 float tmp[8];
@@ -1162,8 +1273,7 @@ namespace SZo {
                 #pragma unroll
                 for ( ; processed < step && start + processed < len; ++processed)
                     data[(start + processed) * offset] = tmp[processed];
-                unsigned esc = static_cast<unsigned>(_mm256_movemask_ps(_mm256_castsi256_ps(
-                                   _mm256_cmpeq_epi32(quant_avx_i, _mm256_set1_epi32(-32768))))) & ((1u << processed) - 1);
+                unsigned esc = esc_all & ((1u << processed) - 1);
                 while (esc) {
                     int k = __builtin_ctz(esc);
                     data[(start + k) * offset] = quantizer.recover_unpred();
@@ -1175,18 +1285,18 @@ namespace SZo {
     }
 
     template <TUNING Tuning, class T, uint N, class Quantizer>
-    template <COMPMODE CompMode, int step, typename U, typename>
+    template <COMPMODE CompMode, int step, bool FullOnly, typename U, typename>
     ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::quantize_double (__m256d& sum, size_t& start, T*& data, size_t& offset, size_t& len) {
         if constexpr (CompMode == COMPMODE::COMP) {
             T ori[4];
             __m256d ori_avx;
-            const bool full_vector = start + step <= len;
-            if (offset == 1 && full_vector) {
-                ori_avx = _mm256_loadu_pd(data + start);
-            } else if (full_vector) {
-                // strided but fully in-bounds: straight reads, no per-lane bound check
-                for (size_t j = 0; j < step; ++j) ori[j] = data[(start + j) * offset];
-                ori_avx = _mm256_loadu_pd(ori);
+            if constexpr (FullOnly) {
+                // caller guarantees a full chunk: read straight, skip the per-lane tail routing
+                if (offset == 1) ori_avx = _mm256_loadu_pd(data + start);
+                else {
+                    for (size_t j = 0; j < step; ++j) ori[j] = data[(start + j) * offset];
+                    ori_avx = _mm256_loadu_pd(ori);
+                }
             } else {
                 // tail: clamp past-end indices to the last valid element (avoid OOB read)
                 for (size_t j = 0; j < step; ++j) {
@@ -1219,13 +1329,18 @@ namespace SZo {
             __m128i quant_avx_i = _mm256_cvtpd_epi32(quant_avx);
 
             size_t processed = 0;
-            if (offset == 1 && full_vector) {
+            __m256d out = _mm256_blendv_pd(decompressed, ori_avx, esc_mask);  // escape lane -> keep original
+            if constexpr (FullOnly) {
                 processed = step;
-                __m256d out = _mm256_blendv_pd(decompressed, ori_avx, esc_mask);  // escape lane -> keep original
-                _mm256_storeu_pd(data + start, out);
                 unsigned esc = static_cast<unsigned>(_mm256_movemask_pd(esc_mask)) & ((1u << step) - 1);
-                if (esc) {
-                    _mm256_storeu_pd(ori, ori_avx);
+                if (offset == 1) {
+                    _mm256_storeu_pd(data + start, out);
+                    if (esc) _mm256_storeu_pd(ori, ori_avx);   // contiguous read left ori[] unfilled
+                } else {
+                    T tmp[4];
+                    _mm256_storeu_pd(tmp, out);
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) data[(start + j) * offset] = tmp[j];
                 }
                 while (esc) {
                     int k = __builtin_ctz(esc);
@@ -1234,14 +1349,13 @@ namespace SZo {
                 }
             } else {
                 T tmp[4];
-                _mm256_storeu_pd(tmp, decompressed);
+                _mm256_storeu_pd(tmp, out);
                 #pragma unroll
                 for ( ; processed < step && start + processed < len; ++processed)
                     data[(start + processed) * offset] = tmp[processed];
                 unsigned esc = static_cast<unsigned>(_mm256_movemask_pd(esc_mask)) & ((1u << processed) - 1);
                 while (esc) {
                     int k = __builtin_ctz(esc);
-                    data[(start + k) * offset] = ori[k];
                     quantizer.force_save_unpred(ori[k]);
                     esc &= esc - 1;
                 }
@@ -1255,17 +1369,21 @@ namespace SZo {
             __m256d decompressed = _mm256_fmadd_pd(_mm256_cvtepi32_pd(quant_avx_i), 
                                     ebx2_avx, sum);
             
-            const bool full_vector = start + step <= len;
             size_t processed = 0;
-            if (offset == 1 && full_vector) {
+            unsigned esc_all = static_cast<unsigned>(_mm_movemask_ps(_mm_castsi128_ps(
+                                   _mm_cmpeq_epi32(quant_avx_i, _mm_set1_epi32(-32768)))));
+            if constexpr (FullOnly) {
                 processed = step;
-                _mm256_storeu_pd(data + start, decompressed);
-                unsigned esc = static_cast<unsigned>(_mm_movemask_ps(_mm_castsi128_ps(
-                                   _mm_cmpeq_epi32(quant_avx_i, _mm_set1_epi32(-32768))))) & ((1u << step) - 1);
-                while (esc) {
-                    int k = __builtin_ctz(esc);
-                    data[start + k] = quantizer.recover_unpred();
-                    esc &= esc - 1;
+                unsigned esc = esc_all & ((1u << step) - 1);
+                if (offset == 1) {
+                    _mm256_storeu_pd(data + start, decompressed);
+                    while (esc) { int k = __builtin_ctz(esc); data[start + k] = quantizer.recover_unpred(); esc &= esc - 1; }
+                } else {
+                    T tmp[4];
+                    _mm256_storeu_pd(tmp, decompressed);
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) data[(start + j) * offset] = tmp[j];
+                    while (esc) { int k = __builtin_ctz(esc); data[(start + k) * offset] = quantizer.recover_unpred(); esc &= esc - 1; }
                 }
             } else {
                 T tmp[4];
@@ -1273,8 +1391,7 @@ namespace SZo {
                 #pragma unroll
                 for ( ; processed < step && start + processed < len; ++processed)
                     data[(start + processed) * offset] = tmp[processed];
-                unsigned esc = static_cast<unsigned>(_mm_movemask_ps(_mm_castsi128_ps(
-                                   _mm_cmpeq_epi32(quant_avx_i, _mm_set1_epi32(-32768))))) & ((1u << processed) - 1);
+                unsigned esc = esc_all & ((1u << processed) - 1);
                 while (esc) {
                     int k = __builtin_ctz(esc);
                     data[(start + k) * offset] = quantizer.recover_unpred();
@@ -1816,27 +1933,44 @@ namespace SZo {
             static const size_t step = SVE2_parallelism;
             svbool_t pg = svptrue_b32();
             svbool_t pg64 = svptrue_b64();
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 svfloat32_t va = svld1(pg, &a[i]);
                 svfloat32_t vb = svld1(pg, &b[i]);
 
                 svfloat32_t sum = svadd_f32_x(pg, va, vb);
                 sum = svmul_n_f32_x(pg, sum, 0.5f);   
                 
-                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64);
+                quantize_float<CompMode, true>(sum, i, data, offset, len, step, pg, pg64);
+            }
+            if (i < len) {
+                svfloat32_t va = svld1(pg, &a[i]);
+                svfloat32_t vb = svld1(pg, &b[i]);
+
+                svfloat32_t sum = svadd_f32_x(pg, va, vb);
+                sum = svmul_n_f32_x(pg, sum, 0.5f);   
+                
+                quantize_float<CompMode, false>(sum, i, data, offset, len, step, pg, pg64);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
             svbool_t pg64 = svptrue_b64();
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 svfloat64_t va = svld1(pg64, &a[i]);
                 svfloat64_t vb = svld1(pg64, &b[i]);
 
                 svfloat64_t sum = svadd_f64_x(pg64, va, vb);
                 sum = svmul_n_f64_x(pg64, sum, 0.5);
-                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64);
+                quantize_double<CompMode, true>(sum, i, data, offset, len, step, pg64);
+            }
+            if (i < len) {
+                svfloat64_t va = svld1(pg64, &a[i]);
+                svfloat64_t vb = svld1(pg64, &b[i]);
+
+                svfloat64_t sum = svadd_f64_x(pg64, va, vb);
+                sum = svmul_n_f64_x(pg64, sum, 0.5);
+                quantize_double<CompMode, false>(sum, i, data, offset, len, step, pg64);
             }
         }
     }
@@ -1852,7 +1986,7 @@ namespace SZo {
             svbool_t pg = svptrue_b32();
             svbool_t pg64 = svptrue_b64();
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 svfloat32_t va = svld1(pg, &a[i]);
                 svfloat32_t vb = svld1(pg, &b[i]);
                 svfloat32_t vc = svld1(pg, &c[i]);
@@ -1867,14 +2001,31 @@ namespace SZo {
                 sum = svmul_n_f32_x(pg, sum, 0.0625f);
                 
                 // _mm256_storeu_ps(p + i, sum);
-                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64);
+                quantize_float<CompMode, true>(sum, i, data, offset, len, step, pg, pg64);
+            }
+            if (i < len) {
+                svfloat32_t va = svld1(pg, &a[i]);
+                svfloat32_t vb = svld1(pg, &b[i]);
+                svfloat32_t vc = svld1(pg, &c[i]);
+                
+                svfloat32_t sum = svadd_f32_x(pg, vb, vc);
+                sum = svmul_n_f32_x(pg, sum, 9.0f);
+
+                svfloat32_t vd = svld1(pg, &d[i]);
+                
+                sum = svsub_f32_x(pg, sum, va);
+                sum = svsub_f32_x(pg, sum, vd);
+                sum = svmul_n_f32_x(pg, sum, 0.0625f);
+                
+                // _mm256_storeu_ps(p + i, sum);
+                quantize_float<CompMode, false>(sum, i, data, offset, len, step, pg, pg64);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
             svbool_t pg64 = svptrue_b64();
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 svfloat64_t va = svld1(pg64, &a[i]);
                 svfloat64_t vb = svld1(pg64, &b[i]);
                 svfloat64_t vc = svld1(pg64, &c[i]);
@@ -1888,7 +2039,23 @@ namespace SZo {
                 sum = svsub_f64_x(pg64, sum, vd);
                 sum = svmul_n_f64_x(pg64, sum, 0.0625);
 
-                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64);
+                quantize_double<CompMode, true>(sum, i, data, offset, len, step, pg64);
+            }
+            if (i < len) {
+                svfloat64_t va = svld1(pg64, &a[i]);
+                svfloat64_t vb = svld1(pg64, &b[i]);
+                svfloat64_t vc = svld1(pg64, &c[i]);
+                
+                svfloat64_t sum = svadd_f64_x(pg64, vb, vc);
+                sum = svmul_n_f64_x(pg64, sum, 9.0);
+
+                svfloat64_t vd = svld1(pg64, &d[i]);
+                
+                sum = svsub_f64_x(pg64, sum, va);
+                sum = svsub_f64_x(pg64, sum, vd);
+                sum = svmul_n_f64_x(pg64, sum, 0.0625);
+
+                quantize_double<CompMode, false>(sum, i, data, offset, len, step, pg64);
             }
         }
     }
@@ -1903,19 +2070,28 @@ namespace SZo {
             svbool_t pg = svptrue_b32();
             svbool_t pg64 = svptrue_b64();
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 svfloat32_t sum = svld1(pg, &a[i]);                
                 // _mm256_storeu_ps(p + i, sum);
-                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64);
+                quantize_float<CompMode, true>(sum, i, data, offset, len, step, pg, pg64);
+            }
+            if (i < len) {
+                svfloat32_t sum = svld1(pg, &a[i]);                
+                // _mm256_storeu_ps(p + i, sum);
+                quantize_float<CompMode, false>(sum, i, data, offset, len, step, pg, pg64);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
             svbool_t pg64 = svptrue_b64();
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 svfloat64_t sum = svld1(pg64, &a[i]);                
-                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64);
+                quantize_double<CompMode, true>(sum, i, data, offset, len, step, pg64);
+            }
+            if (i < len) {
+                svfloat64_t sum = svld1(pg64, &a[i]);                
+                quantize_double<CompMode, false>(sum, i, data, offset, len, step, pg64);
             }
         }
     }
@@ -1930,25 +2106,40 @@ namespace SZo {
             static const size_t step = SVE2_parallelism;
             svbool_t pg = svptrue_b32();
             svbool_t pg64 = svptrue_b64();
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 svfloat32_t va = svld1(pg, &a[i]);  
                 svfloat32_t vb = svld1(pg, &b[i]);
                 vb = svmul_n_f32_x(pg, vb, 1.5f);
                 svfloat32_t sum = svmls_n_f32_x(pg, vb, va, 0.5f);
                 // _mm256_storeu_ps(p + i, sum);
-                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64);
+                quantize_float<CompMode, true>(sum, i, data, offset, len, step, pg, pg64);
+            }
+            if (i < len) {
+                svfloat32_t va = svld1(pg, &a[i]);  
+                svfloat32_t vb = svld1(pg, &b[i]);
+                vb = svmul_n_f32_x(pg, vb, 1.5f);
+                svfloat32_t sum = svmls_n_f32_x(pg, vb, va, 0.5f);
+                // _mm256_storeu_ps(p + i, sum);
+                quantize_float<CompMode, false>(sum, i, data, offset, len, step, pg, pg64);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
             svbool_t pg64 = svptrue_b64();
             
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 svfloat64_t va = svld1(pg64, &a[i]);  
                 svfloat64_t vb = svld1(pg64, &b[i]);
                 vb = svmul_n_f64_x(pg64, vb, 1.5);
                 svfloat64_t sum = svmls_n_f64_x(pg64, vb, va, 0.5);
-                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64);
+                quantize_double<CompMode, true>(sum, i, data, offset, len, step, pg64);
+            }
+            if (i < len) {
+                svfloat64_t va = svld1(pg64, &a[i]);  
+                svfloat64_t vb = svld1(pg64, &b[i]);
+                vb = svmul_n_f64_x(pg64, vb, 1.5);
+                svfloat64_t sum = svmls_n_f64_x(pg64, vb, va, 0.5);
+                quantize_double<CompMode, false>(sum, i, data, offset, len, step, pg64);
             }
         }
     }
@@ -1964,7 +2155,7 @@ namespace SZo {
             svbool_t pg = svptrue_b32();
             svbool_t pg64 = svptrue_b64();
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 svfloat32_t vb = svld1(pg, &b[i]);
                 svfloat32_t vc = svld1(pg, &c[i]);
                 vb = svnmls_n_f32_x(pg, vc, vb, 6.0f);
@@ -1972,21 +2163,40 @@ namespace SZo {
                 svfloat32_t sum = svmla_n_f32_x(pg, vb, va, 3.0f);
                 sum = svmul_n_f32_x(pg, sum, 0.125f);
                 // _mm256_storeu_ps(p + i, sum);
-                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64);
+                quantize_float<CompMode, true>(sum, i, data, offset, len, step, pg, pg64);
+            }
+            if (i < len) {
+                svfloat32_t vb = svld1(pg, &b[i]);
+                svfloat32_t vc = svld1(pg, &c[i]);
+                vb = svnmls_n_f32_x(pg, vc, vb, 6.0f);
+                svfloat32_t va = svld1(pg, &a[i]);  
+                svfloat32_t sum = svmla_n_f32_x(pg, vb, va, 3.0f);
+                sum = svmul_n_f32_x(pg, sum, 0.125f);
+                // _mm256_storeu_ps(p + i, sum);
+                quantize_float<CompMode, false>(sum, i, data, offset, len, step, pg, pg64);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
             svbool_t pg64 = svptrue_b64();
             
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 svfloat64_t vb = svld1(pg64, &b[i]);
                 svfloat64_t vc = svld1(pg64, &c[i]);
                 vb = svnmls_n_f64_x(pg64, vc, vb, 6.0);
                 svfloat64_t va = svld1(pg64, &a[i]);  
                 svfloat64_t sum = svmla_n_f64_x(pg64, vb, va, 3.0);
                 sum = svmul_n_f64_x(pg64, sum, 0.125);
-                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64);
+                quantize_double<CompMode, true>(sum, i, data, offset, len, step, pg64);
+            }
+            if (i < len) {
+                svfloat64_t vb = svld1(pg64, &b[i]);
+                svfloat64_t vc = svld1(pg64, &c[i]);
+                vb = svnmls_n_f64_x(pg64, vc, vb, 6.0);
+                svfloat64_t va = svld1(pg64, &a[i]);  
+                svfloat64_t sum = svmla_n_f64_x(pg64, vb, va, 3.0);
+                sum = svmul_n_f64_x(pg64, sum, 0.125);
+                quantize_double<CompMode, false>(sum, i, data, offset, len, step, pg64);
             }
 
         }      
@@ -2002,7 +2212,7 @@ namespace SZo {
             svbool_t pg = svptrue_b32();
             svbool_t pg64 = svptrue_b64();
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 svfloat32_t va = svld1(pg, &a[i]);
                 svfloat32_t vb = svld1(pg, &b[i]);
                 vb = svnmls_n_f32_x(pg, va, vb, 6.0f);
@@ -2011,14 +2221,25 @@ namespace SZo {
                 svfloat32_t sum = svmla_n_f32_x(pg, vb, vc, 3.0f);
                 sum = svmul_n_f32_x(pg, sum, 0.125f);
                 // _mm256_storeu_ps(p + i, sum);
-                quantize_float<CompMode>(sum, i, data, offset, len, step, pg, pg64);
+                quantize_float<CompMode, true>(sum, i, data, offset, len, step, pg, pg64);
+            }
+            if (i < len) {
+                svfloat32_t va = svld1(pg, &a[i]);
+                svfloat32_t vb = svld1(pg, &b[i]);
+                vb = svnmls_n_f32_x(pg, va, vb, 6.0f);
+
+                svfloat32_t vc = svld1(pg, &c[i]);
+                svfloat32_t sum = svmla_n_f32_x(pg, vb, vc, 3.0f);
+                sum = svmul_n_f32_x(pg, sum, 0.125f);
+                // _mm256_storeu_ps(p + i, sum);
+                quantize_float<CompMode, false>(sum, i, data, offset, len, step, pg, pg64);
             }
         }
         else if constexpr (std::is_same_v<T, double>) {
             static const size_t step = SVE2_parallelism;
             svbool_t pg64 = svptrue_b64();
 
-            for (; i  < len; i += step) {
+            for (; i + step <= len; i += step) {
                 svfloat64_t va = svld1(pg64, &a[i]);
                 svfloat64_t vb = svld1(pg64, &b[i]);
                 vb = svnmls_n_f64_x(pg64, va, vb, 6.0);
@@ -2027,7 +2248,18 @@ namespace SZo {
                 svfloat64_t sum = svmla_n_f64_x(pg64, vb, vc, 3.0);
                 sum = svmul_n_f64_x(pg64, sum, 0.125);
                 // _mm256_storeu_ps(p + i, sum);
-                quantize_double<CompMode>(sum, i, data, offset, len, step, pg64);
+                quantize_double<CompMode, true>(sum, i, data, offset, len, step, pg64);
+            }
+            if (i < len) {
+                svfloat64_t va = svld1(pg64, &a[i]);
+                svfloat64_t vb = svld1(pg64, &b[i]);
+                vb = svnmls_n_f64_x(pg64, va, vb, 6.0);
+
+                svfloat64_t vc = svld1(pg64, &c[i]);
+                svfloat64_t sum = svmla_n_f64_x(pg64, vb, vc, 3.0);
+                sum = svmul_n_f64_x(pg64, sum, 0.125);
+                // _mm256_storeu_ps(p + i, sum);
+                quantize_double<CompMode, false>(sum, i, data, offset, len, step, pg64);
             }
         }   
       
@@ -2101,17 +2333,21 @@ namespace SZo {
     }
 
     template <TUNING Tuning, class T, uint N, class Quantizer>
-    template <COMPMODE CompMode, typename U, typename>
+    template <COMPMODE CompMode, bool FullOnly, typename U, typename>
     ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::quantize_float (svfloat32_t& sum, size_t& start, T*& data, size_t& offset, 
         size_t& len, const size_t& step, svbool_t& pg, svbool_t& pg64) {
         if constexpr (CompMode == COMPMODE::COMP) {
             T ori[step];
             size_t base = start * offset;
 
-            if (start + step <= len) {
-                #pragma unroll
-                for (size_t j = 0; j < step; ++j) {
-                    ori[j] = data[base + j * offset];
+            svfloat32_t ori_sve;
+            if constexpr (FullOnly) {
+                if (offset == 1) {
+                    ori_sve = svld1(pg, data + start);   // contiguous: SIMD load straight (ori[] filled lazily on escape)
+                } else {
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) ori[j] = data[base + j * offset];
+                    ori_sve = svld1(pg, ori);
                 }
             } else {
                 // tail: clamp past-end indices to the last valid element (avoid OOB read)
@@ -2119,9 +2355,8 @@ namespace SZo {
                     size_t idx = (start + j < len) ? (start + j) : (len - 1);
                     ori[j] = data[idx * offset];
                 }
+                ori_sve = svld1(pg, ori);
             }
-
-            svfloat32_t ori_sve = svld1(pg, ori);
             svfloat32_t quant_sve = svsub_f32_x(pg, ori_sve, sum); // prediction error
 
             T tmp[step];
@@ -2164,14 +2399,34 @@ namespace SZo {
 
             svint32_t quant_sve_i = svcvt_s32_f32_z(pg, quant_sve);
             svst1(pg, quant_vals, quant_sve_i);
-            size_t j = 0;
-            
-            #pragma unroll
-            for ( ; j < step && start + j < len; ++j) {
-                if (quant_vals[j] != -32768) 
-                    data[(start + j) * offset] = tmp[j];
-                else
-                    quantizer.force_save_unpred(ori[j]);
+            size_t j;
+            if constexpr (FullOnly) {
+                if (offset == 1) {
+                    // contiguous full: SIMD store, escape lanes -> original
+                    svbool_t esc_pred = svcmpeq_n_s32(pg, quant_sve_i, -32768);
+                    svst1_f32(pg, data + start, svsel_f32(esc_pred, ori_sve, decompressed));
+                    if (svptest_any(pg, esc_pred)) {
+                        svst1_f32(pg, ori, ori_sve);   // contiguous read left ori[] unfilled
+                        #pragma unroll
+                        for (size_t k = 0; k < step; ++k)
+                            if (quant_vals[k] == -32768) quantizer.force_save_unpred(ori[k]);
+                    }
+                } else {
+                    // strided full: no per-lane bound check
+                    #pragma unroll
+                    for (size_t k = 0; k < step; ++k) {
+                        if (quant_vals[k] != -32768) data[(start + k) * offset] = tmp[k];
+                        else quantizer.force_save_unpred(ori[k]);
+                    }
+                }
+                j = step;
+            } else {
+                j = 0;
+                #pragma unroll
+                for ( ; j < step && start + j < len; ++j) {
+                    if (quant_vals[j] != -32768) data[(start + j) * offset] = tmp[j];
+                    else quantizer.force_save_unpred(ori[j]);
+                }
             }
 
             svst1h_s32(pg, quant_inds + quant_index, quant_sve_i);
@@ -2195,31 +2450,54 @@ namespace SZo {
 
             T tmp[step];
             svst1_f32(pg, tmp, decompressed);
-            
-            size_t j = 0;
-            #pragma unroll
-            for ( ; j < step && start + j < len; ++j) {
-                if (quant_vals[j] != -32768) 
-                    data[(start + j) * offset] = tmp[j];
-                else 
-                    data[(start + j) * offset] = quantizer.recover_unpred();
+
+            size_t j;
+            if constexpr (FullOnly) {
+                if (offset == 1) {
+                    // contiguous full: SIMD store decompressed, then patch escape lanes
+                    svst1_f32(pg, data + start, decompressed);
+                    svbool_t esc_pred = svcmpeq_n_s32(pg, quant_sve_i, -32768);
+                    if (svptest_any(pg, esc_pred)) {
+                        #pragma unroll
+                        for (size_t k = 0; k < step; ++k)
+                            if (quant_vals[k] == -32768) data[start + k] = quantizer.recover_unpred();
+                    }
+                } else {
+                    #pragma unroll
+                    for (size_t k = 0; k < step; ++k) {
+                        if (quant_vals[k] != -32768) data[(start + k) * offset] = tmp[k];
+                        else data[(start + k) * offset] = quantizer.recover_unpred();
+                    }
+                }
+                j = step;
+            } else {
+                j = 0;
+                #pragma unroll
+                for ( ; j < step && start + j < len; ++j) {
+                    if (quant_vals[j] != -32768) data[(start + j) * offset] = tmp[j];
+                    else data[(start + j) * offset] = quantizer.recover_unpred();
+                }
             }
             quant_index += j;
         }
     }
 
     template <TUNING Tuning, class T, uint N, class Quantizer>
-    template <COMPMODE CompMode, typename U, typename>
+    template <COMPMODE CompMode, bool FullOnly, typename U, typename>
     ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::quantize_double (svfloat64_t& sum, size_t& start, T*& data, size_t& offset, 
         size_t& len, const size_t& step, svbool_t& pg64) {
         if constexpr (CompMode == COMPMODE::COMP) {
             T ori[step];
             size_t base = start * offset;
 
-            if (start + step <= len) {
-                #pragma unroll
-                for (size_t j = 0; j < step; ++j) {
-                    ori[j] = data[base + j * offset];
+            svfloat64_t ori_sve;
+            if constexpr (FullOnly) {
+                if (offset == 1) {
+                    ori_sve = svld1(pg64, data + start);   // contiguous: SIMD load straight (ori[] filled lazily on escape)
+                } else {
+                    #pragma unroll
+                    for (size_t j = 0; j < step; ++j) ori[j] = data[base + j * offset];
+                    ori_sve = svld1(pg64, ori);
                 }
             } else {
                 // tail: clamp past-end indices to the last valid element (avoid OOB read)
@@ -2227,9 +2505,8 @@ namespace SZo {
                     size_t idx = (start + j < len) ? (start + j) : (len - 1);
                     ori[j] = data[idx * offset];
                 }
+                ori_sve = svld1(pg64, ori);
             }
-
-            svfloat64_t ori_sve = svld1(pg64, ori);
             svfloat64_t quant_sve = svsub_f64_x(pg64, ori_sve, sum); // prediction error
             T tmp[step];
             int quant_vals[step];
@@ -2253,13 +2530,33 @@ namespace SZo {
             
             svst1w_s64(pg64, quant_vals, quant_sve_i);
 
-            size_t j = 0;
-            #pragma unroll
-            for ( ; j < step && start + j < len; ++j) {
-                if (quant_vals[j] != -32768)
-                    data[(start + j) * offset] = tmp[j];
-                else
-                    quantizer.force_save_unpred(ori[j]);
+            size_t j;
+            if constexpr (FullOnly) {
+                if (offset == 1) {
+                    // contiguous full: SIMD store, escape lanes -> original
+                    svbool_t esc_pred = svcmpeq_n_s64(pg64, quant_sve_i, -32768);
+                    svst1_f64(pg64, data + start, svsel_f64(esc_pred, ori_sve, decompressed));
+                    if (svptest_any(pg64, esc_pred)) {
+                        svst1_f64(pg64, ori, ori_sve);   // contiguous read left ori[] unfilled
+                        #pragma unroll
+                        for (size_t k = 0; k < step; ++k)
+                            if (quant_vals[k] == -32768) quantizer.force_save_unpred(ori[k]);
+                    }
+                } else {
+                    #pragma unroll
+                    for (size_t k = 0; k < step; ++k) {
+                        if (quant_vals[k] != -32768) data[(start + k) * offset] = tmp[k];
+                        else quantizer.force_save_unpred(ori[k]);
+                    }
+                }
+                j = step;
+            } else {
+                j = 0;
+                #pragma unroll
+                for ( ; j < step && start + j < len; ++j) {
+                    if (quant_vals[j] != -32768) data[(start + j) * offset] = tmp[j];
+                    else quantizer.force_save_unpred(ori[j]);
+                }
             }
             svst1h_s64(pg64, quant_inds + quant_index, quant_sve_i);
             quant_index += j;
@@ -2273,14 +2570,33 @@ namespace SZo {
                     svcvt_f64_s64_x(pg64, quant_sve_i), svdup_f64(real_ebx2));
             T tmp[step];
             svst1_f64(pg64, tmp, decompressed);
-            size_t j = 0;
-            for ( ; j < step && start + j < len; ++j) {
-                if (quant_vals[j] != -32768) 
-                    data[(start + j) * offset] = tmp[j];
-                else
-                    data[(start + j) * offset] = quantizer.recover_unpred();
+            size_t j;
+            if constexpr (FullOnly) {
+                if (offset == 1) {
+                    svst1_f64(pg64, data + start, decompressed);
+                    svbool_t esc_pred = svcmpeq_n_s64(pg64, quant_sve_i, -32768);
+                    if (svptest_any(pg64, esc_pred)) {
+                        #pragma unroll
+                        for (size_t k = 0; k < step; ++k)
+                            if (quant_vals[k] == -32768) data[start + k] = quantizer.recover_unpred();
+                    }
+                } else {
+                    #pragma unroll
+                    for (size_t k = 0; k < step; ++k) {
+                        if (quant_vals[k] != -32768) data[(start + k) * offset] = tmp[k];
+                        else data[(start + k) * offset] = quantizer.recover_unpred();
+                    }
+                }
+                j = step;
+            } else {
+                j = 0;
+                #pragma unroll
+                for ( ; j < step && start + j < len; ++j) {
+                    if (quant_vals[j] != -32768) data[(start + j) * offset] = tmp[j];
+                    else data[(start + j) * offset] = quantizer.recover_unpred();
+                }
             }
-            quant_index += j;  
+            quant_index += j;
         }
     }
 #else

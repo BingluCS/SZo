@@ -35,28 +35,28 @@ Note, if the HDF5 in your system contains both `h5repack-shared` and `h5repack`,
 
 **Method 1: Compression with default settings (see SZ3/utils/Config.hpp for defaults)**
 ```bash
-h5repack-shared -f UD=32024,0 data.h5 data.sz3.h5
+h5repack-shared -f UD=32024,0 data.h5 data.szo.h5
 ```
 
 **Method 2: Compression with customized settings in configuration file**
 
 Step 1, generate H5Z-SZo parameters from SZo configuration file:
 ```bash
-print_h5repack_args -c sz3.config
+print_h5repack_args -c szo.config
 ```
 Step 2, compress by h5repack-shared with generated parameters:
 ```bash
-h5repack-shared -f UD=32024,0,11,4077060608,16843009,0,0,4054449152,1348619730,16826431,257,2147483904,2147483648,16777216 data.h5 data.sz3.h5
+h5repack-shared -f UD=32024,0,11,4077060608,16843009,0,0,4054449152,1348619730,16826431,257,2147483904,2147483648,16777216 data.h5 data.szo.h5
 ```
 
 Alternatively, use the script to generate parameters and compress at once:
 ```bash
-h5repack.sh ~/code/sz3/tools/sz3/sz3.config data.h5 data.sz3.h5
+h5repack.sh ~/code/SZo/tools/szo/szo.config data.h5 data.szo.h5
 ```
 
 ### Decompression
 ```bash
-h5repack-shared -f NONE data.sz3.h5 data.sz3_decompressed.h5
+h5repack-shared -f NONE data.szo.h5 data.szo_decompressed.h5
 ```
 
 ## Use H5Z-SZo in code (C/C++)

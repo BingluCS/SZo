@@ -91,12 +91,12 @@ endif ()
 
 option(BUILD_SZo_BINARY "build SZO executable" ON)
 if (BUILD_SZo_BINARY)
-    add_subdirectory(tools/sz3)
+    add_subdirectory(tools/szo)
 endif ()
 
 option(BUILD_SZOC_LIBRARY "build SZO C API library" ON)
 if (BUILD_SZOC_LIBRARY)
-    add_subdirectory(tools/sz3c)
+    add_subdirectory(tools/szoc)
 endif ()
 
 option(BUILD_H5Z_FILTER "build the H5Z-SZo filter" OFF)
@@ -156,5 +156,5 @@ install(FILES
         ${CMAKE_CURRENT_BINARY_DIR}/SZoConfigVersion.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/SZo
 )
-#export sz3 target for external use
+#export szo target for external use
 export(TARGETS SZo FILE SZo.cmake)

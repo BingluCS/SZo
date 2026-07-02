@@ -315,8 +315,8 @@ public:
         auto c0 = c;
         c += sizeof(uchar); //reserve space for conf size
 
-        write(sz3MagicNumber, c);
-        write(sz3DataVer, c);
+        write(szoMagicNumber, c);
+        write(szoDataVer, c);
         write(N, c);
         // write(dims.data(), dims.size(), c);
         auto bitWidth = vector_bit_width(dims);
@@ -366,8 +366,8 @@ public:
         uchar confSize = 0;
         read(confSize, c);
         auto c1 = c + confSize;
-        read(sz3MagicNumber, c);
-        read(sz3DataVer, c);
+        read(szoMagicNumber, c);
+        read(szoDataVer, c);
 
         read(N, c);
         uint8_t bitWidth;
@@ -423,8 +423,8 @@ public:
      */
     void print() {
         // printf("===================== Begin SZo Configuration =====================\n");
-        printf("\nsz3MagicNumber = %u\n", sz3MagicNumber);
-        printf("sz3DataVer = %s\n", versionStr(sz3DataVer).data());
+        printf("\nszoMagicNumber = %u\n", szoMagicNumber);
+        printf("szoDataVer = %s\n", versionStr(szoDataVer).data());
         std::cout << "Dimensions =";
         for (auto d : dims) {
             std::cout << " " << d;
@@ -444,8 +444,8 @@ public:
         return save(buffer_pos);
     }
 
-    uint32_t sz3MagicNumber = SZo_MAGIC_NUMBER;
-    uint32_t sz3DataVer = versionInt(SZo_DATA_VER);
+    uint32_t szoMagicNumber = SZo_MAGIC_NUMBER;
+    uint32_t szoDataVer = versionInt(SZo_DATA_VER);
     char N = 0;
     std::vector<size_t> dims;
     size_t num = 0;

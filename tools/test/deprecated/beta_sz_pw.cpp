@@ -111,7 +111,7 @@ float SZ_compress(std::unique_ptr<T[]> const &data,
     std::uniform_int_distribution<> dis(0, 10000);
     std::stringstream ss;
     ss << src_file_name.substr(src_file_name.rfind('/') + 1)
-       << "." << relative_error_bound << "." << dis(gen) << ".sz3";
+       << "." << relative_error_bound << "." << dis(gen) << ".szo";
     auto compressed_file_name = ss.str();
     SZo::writefile(compressed_file_name.c_str(), compressed.get(), compressed_size);
     std::cout << "Compressed file = " << compressed_file_name << std::endl;

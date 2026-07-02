@@ -131,14 +131,14 @@ void SZ_decompress_OMP(Config& conf, const uchar* cmpData, size_t cmpSize, T* de
         conf_t[i].load(cmpr_data_pos);
     }
 
-    if (conf_t[0].sz3MagicNumber != SZo_MAGIC_NUMBER) {
+    if (conf_t[0].szoMagicNumber != SZo_MAGIC_NUMBER) {
         throw std::invalid_argument("magic number mismatch, the input data is not compressed by SZo");
     }
-    if (versionStr(conf_t[0].sz3DataVer) != SZo_DATA_VER) {
+    if (versionStr(conf_t[0].szoDataVer) != SZo_DATA_VER) {
         std::stringstream ss;
         printf("program v%s , program-data %s , input data v%s\n", SZo_VER, SZo_DATA_VER,
-               versionStr(conf_t[0].sz3DataVer).data());
-        ss << "Please use SZo v" << versionStr(conf_t[0].sz3DataVer) << " to decompress the data" << std::endl;
+               versionStr(conf_t[0].szoDataVer).data());
+        ss << "Please use SZo v" << versionStr(conf_t[0].szoDataVer) << " to decompress the data" << std::endl;
         std::cerr << ss.str();
         throw std::invalid_argument(ss.str());
     }

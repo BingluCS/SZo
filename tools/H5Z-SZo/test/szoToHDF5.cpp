@@ -115,7 +115,7 @@ int main(int argc, char *argv[]) {
 
     // set up SZ configuration
     SZo::Config conf;
-    // use config.loadcfg("path_to_sz3_conf") to load configuration from a file if needed
+    // use config.loadcfg("path_to_szo_conf") to load configuration from a file if needed
     // setting up data related attributes (data type, dims, etc.) is not necessary, as they will be updated in
     // H5Z_szo_set_local automatically
     conf.setDims(dimensions.begin(), dimensions.end());

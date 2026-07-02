@@ -23,7 +23,7 @@ Executables land in `[INSTALL_DIR]/bin`, headers in `[INSTALL_DIR]/include`.
 ## How to run
 
 ### SZo executable
-`tools/sz3/szo` — command-line compression / decompression. Run it with no arguments to see usage.
+`tools/szo/szo` — command-line compression / decompression. Run it with no arguments to see usage.
 
 ### C++ API
 * Header-only: `#include "SZo/api/sz.hpp"`; everything lives in namespace `SZo`. Needs a C++17 compiler. (Different from the SZ2 API.)
@@ -41,7 +41,7 @@ T     *dec  = SZ_decompress<T>(conf, comp, outSize);     // -> reconstructed dat
 * **AVX2/SVE2:** compile the translation unit that includes the header with `-mavx2 -mfma` (x86) or `-march=armv8.6-a+sve2` (ARM). If you build through this project's CMake, linking the `SZo` target adds the flag for you.
 
 ### C API (SZOc)
-* Header `tools/sz3c/include/szo.h`, library target `SZOc`. **Compatible with the SZ2 C API.**
+* Header `tools/szoc/include/szo.h`, library target `SZOc`. **Compatible with the SZ2 C API.**
 ```c
 #include "szo.h"
 
@@ -95,7 +95,7 @@ Version New features
 * SZ 3.0.1 Improve the build process.
 * SZ 3.1.0 The default algorithm is now interpolation+Lorenzo.
 * SZ 3.1.1 Add OpenMP support. Works for all algorithms. Please enable it using the config file. 
-* SZ 3.1.2 Support configuration file (INI format). An example can be found in 'tools/sz3/sz3.config'.
+* SZ 3.1.2 Support configuration file (INI format). An example can be found in 'tools/szo/szo.config'.
 * SZ 3.1.3 Support more error control mode: PSNR, L2Norm, ABS_AND_REL, ABS_OR_REL. Support INT32 and INT64 datatype.
 * SZ 3.1.4 Support running on Windows natively with Visual Studio. Please use CMake to generate Visual Studio solution files.
 * SZ 3.1.5 Support HDF5 by H5Z-SZ3. Please add "-DBUILD_H5Z_FILTER=ON" to enable this function for CMake.
