@@ -70,7 +70,7 @@ decompressed, config    = sz.decompress(compressed, np.float32, data.shape)
 max_err, psnr, nrmse    = sz.verify(data, decompressed.reshape(data.shape))
 ```
 * `sz.compress` works on a private copy, so your input array is **left unchanged**. `sz.decompress(data, dtype, shape)` recovers the SZo configuration from the compressed stream, so passing the original `config` is optional.
-* The wheel builds SZo from source; the bundled Zstd and (on x86) the SIMD build options are handled by `setup.py`.
+* The wheel builds SZo from source (with bundled Zstd). For a source build, `setup.py` **auto-detects the build machine's SIMD** — `-march=native` enables AVX2 on x86 and SVE2 on ARM, and stays scalar otherwise. Set `PYSZO_SIMD` to force a target (`avx2`, `sve2`, `native`, `none`, or a custom `-march=…`); see [`tools/pyszo/README.md`](tools/pyszo/README.md) for details.
 
 ### HDF5 filter (H5Z-SZo)
 * Located in `tools/H5Z-SZo`; library target `hdf5szo`, HDF5 filter id **32024**. Build with `-DBUILD_H5Z_FILTER=ON` (requires HDF5).

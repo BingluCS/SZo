@@ -4,6 +4,8 @@ Automatically downloads and builds SZo with bundled zstd.
 """
 
 import sys
+import os
+import platform
 import subprocess
 import shutil
 from pathlib import Path
@@ -86,6 +88,52 @@ class BuildSZoExtension(_build_ext):
 
 
 
+def _simd_flags():
+    """SIMD compile flags for the header-only SZo kernels.
+
+    SZo's AVX2 / SVE2 code is guarded by ``__AVX2__`` / ``__ARM_FEATURE_SVE2``,
+    which the compiler only defines when the right ``-march`` / ``-m`` flag is
+    passed to the translation unit that includes the SZo headers (i.e. these
+    Cython extensions). Without a flag, SZo falls back to the scalar path.
+
+    Default ('auto') is ``-march=native``: it enables AVX2 on an AVX2-capable
+    x86 and SVE2 on an SVE2-capable ARM, and stays scalar on anything else —
+    ideal when you build and run on the same machine (e.g. ``pip install -e .``).
+
+    Override with the ``PYSZO_SIMD`` environment variable:
+
+    ==============  ==================================================
+    PYSZO_SIMD      effect
+    ==============  ==================================================
+    auto / native   ``-march=native`` (default) — the build machine's ISA
+    avx2            ``-mavx2 -mfma`` — portable AVX2 floor (x86)
+    sve2            ``-march=armv8.6-a+sve2`` — ARM SVE2
+    none / scalar   no SIMD — portable everywhere, slowest
+    <other>         passed verbatim, e.g. PYSZO_SIMD="-march=znver4"
+    ==============  ==================================================
+    """
+    mode = os.environ.get("PYSZO_SIMD", "auto").strip()
+    m = mode.lower()
+
+    if sys.platform == "win32":
+        # MSVC has no -march=native; AVX2 is the meaningful knob.
+        if m in ("none", "scalar"):
+            return []
+        if m in ("auto", "native", "avx2"):
+            return ["/arch:AVX2"] if platform.machine().lower() in ("amd64", "x86_64", "x86") else []
+        return []
+
+    if m in ("none", "scalar"):
+        return []
+    if m in ("auto", "native"):
+        return ["-march=native"]
+    if m == "avx2":
+        return ["-mavx2", "-mfma"]
+    if m == "sve2":
+        return ["-march=armv8.6-a+sve2"]
+    return [mode]  # verbatim override
+
+
 def create_extensions():
     include_dirs = [np.get_include()]
     library_dirs = []
@@ -102,6 +150,11 @@ def create_extensions():
         extra_compile_args.extend(['-std=c++17', '-O3'])
         extra_link_args.extend(['-Wl,-rpath,$ORIGIN'])
     
+    simd = _simd_flags()
+    extra_compile_args.extend(simd)
+    print(f"[pyszo] SIMD flags: {' '.join(simd) if simd else '(scalar)'}"
+          f"  — override with PYSZO_SIMD (auto|avx2|sve2|none)")
+
     extensions = [
         Extension(
             "pyszo.pyConfig",

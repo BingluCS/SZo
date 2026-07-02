@@ -33,7 +33,29 @@ cd SZo/tools/pyszo
 pip install -e .
 ```
 
-During a source install, `setup.py` builds SZo from source (bundled Zstd, and on x86 the AVX2 SIMD options), compiles the Cython bindings against it, and packages everything together.
+During a source install, `setup.py` builds SZo from source (with bundled Zstd), compiles the Cython bindings against it, and packages everything together.
+
+### SIMD acceleration (AVX2 / SVE2)
+
+SZo's fast paths are gated on the compiler's SIMD flags, so `pyszo` decides them **when it compiles the bindings** (the translation unit that includes the SZo headers). Without a flag, SZo falls back to the portable scalar path.
+
+- **Default — auto-detect:** builds with `-march=native`, which enables **AVX2** on an AVX2-capable x86 and **SVE2** on an SVE2-capable ARM, and stays scalar on anything else. Ideal when you build and run on the same machine.
+- **Explicit:** set the `PYSZO_SIMD` environment variable before installing:
+
+  | `PYSZO_SIMD` | effect |
+  |---|---|
+  | *(unset)* / `auto` / `native` | `-march=native` (default) — the build machine's ISA |
+  | `avx2` | `-mavx2 -mfma` — a portable AVX2 floor (x86) |
+  | `sve2` | `-march=armv8.6-a+sve2` — ARM SVE2 |
+  | `none` / `scalar` | no SIMD — portable everywhere, slowest |
+  | *(anything else)* | passed verbatim, e.g. `PYSZO_SIMD="-march=znver4"` |
+
+  ```bash
+  PYSZO_SIMD=avx2 pip install -e .     # force a portable AVX2 floor
+  PYSZO_SIMD=none pip install -e .     # scalar, maximum portability
+  ```
+
+> **Portability note:** `-march=native` (and `avx2` / `sve2`) bake those instructions into the `.so`, so it must run on a CPU that supports them — an unsupported CPU raises `SIGILL`. For a redistributable wheel, pick an explicit floor (`avx2`) or `none`; for a local `pip install -e .`, the default `native` is best. The chosen flags are printed during the build: `[pyszo] SIMD flags: …`.
 
 ## Quick Start
 
