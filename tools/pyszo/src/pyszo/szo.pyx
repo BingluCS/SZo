@@ -1,7 +1,7 @@
 # distutils: language = c++
 """Python interface for SZo compression library."""
 
-from pyszo cimport sz as c_sz
+from pyszo cimport szo as c_sz
 from pyszo cimport pyConfig
 cimport cython
 from cython.operator cimport dereference
@@ -16,7 +16,7 @@ from typing import Tuple
 cnp.import_array()
 
 
-cdef class sz:
+cdef class szo:
     """SZo compression/decompression with zero-copy NumPy API."""
     
     # Supported dtypes
@@ -47,7 +47,7 @@ cdef class sz:
             Compression ratio (original_size / compressed_size)
         """
         # Validate dtype
-        if data.dtype not in sz._SUPPORTED_DTYPES:
+        if data.dtype not in szo._SUPPORTED_DTYPES:
             raise TypeError(
                 f"Unsupported dtype: {data.dtype}. "
                 f"Supported: float32, float64, int32, int64"
@@ -149,7 +149,7 @@ cdef class sz:
         
         # Validate and normalize dtype
         dtype = np.dtype(dtype)
-        if dtype not in sz._SUPPORTED_DTYPES:
+        if dtype not in szo._SUPPORTED_DTYPES:
             raise TypeError(
                 f"Unsupported dtype: {dtype}. "
                 f"Supported: float32, float64, int32, int64"

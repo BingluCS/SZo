@@ -57,7 +57,7 @@ free_buf(comp);
 * `pip install pyszo`. [Source in `tools/pyszo`](https://github.com/BingluCS/SZo/tree/main/tools/pyszo).
 ```python
 import numpy as np
-from pyszo import sz, szoConfig, szoErrorBoundMode, szoAlgorithm
+from pyszo import szo, szoConfig, szoErrorBoundMode, szoAlgorithm
 
 data   = np.random.rand(100, 200, 300).astype(np.float32)
 config = szoConfig()
@@ -65,11 +65,11 @@ config.errorBoundMode = szoErrorBoundMode.ABS
 config.absErrorBound  = 1e-3
 # optional: config.cmprAlgo = szoAlgorithm.INTERP_LORENZO
 
-compressed, ratio       = sz.compress(data, config)
-decompressed, config    = sz.decompress(compressed, np.float32, data.shape)
-max_err, psnr, nrmse    = sz.verify(data, decompressed.reshape(data.shape))
+compressed, ratio       = szo.compress(data, config)
+decompressed, config    = szo.decompress(compressed, np.float32, data.shape)
+max_err, psnr, nrmse    = szo.verify(data, decompressed.reshape(data.shape))
 ```
-* `sz.compress` works on a private copy, so your input array is **left unchanged**. `sz.decompress(data, dtype, shape)` recovers the SZo configuration from the compressed stream, so passing the original `config` is optional.
+* `szo.compress` works on a private copy, so your input array is **left unchanged**. `szo.decompress(data, dtype, shape)` recovers the SZo configuration from the compressed stream, so passing the original `config` is optional.
 * The wheel builds SZo from source (with bundled Zstd). For a source build, `setup.py` **auto-detects the build machine's SIMD** — `-march=native` enables AVX2 on x86 and SVE2 on ARM, and stays scalar otherwise. Set `PYSZO_SIMD` to force a target (`avx2`, `sve2`, `native`, `none`, or a custom `-march=…`); see [`tools/pyszo/README.md`](tools/pyszo/README.md) for details.
 
 ### HDF5 filter (H5Z-SZo)

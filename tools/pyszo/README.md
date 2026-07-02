@@ -61,7 +61,7 @@ SZo's fast paths are gated on the compiler's SIMD flags, so `pyszo` decides them
 
 ```python
 import numpy as np
-from pyszo import sz, szoConfig, szoErrorBoundMode, szoAlgorithm
+from pyszo import szo, szoConfig, szoErrorBoundMode, szoAlgorithm
 
 # Create test data
 data = np.random.rand(8, 8, 128).astype(np.float32)
@@ -73,14 +73,14 @@ config.absErrorBound  = 1e-3
 # optional: config.cmprAlgo = szoAlgorithm.INTERP_LORENZO
 
 # Compress (runs on a private copy — your input array is left unchanged)
-compressed, ratio = sz.compress(data, config)
+compressed, ratio = szo.compress(data, config)
 print(f"Compression ratio: {ratio:.2f}x")
 
 # Decompress (the SZo config is recovered from the stream, so config is optional)
-decompressed, config = sz.decompress(compressed, np.float32, data.shape)
+decompressed, config = szo.decompress(compressed, np.float32, data.shape)
 
 # Verify
-max_err, psnr, nrmse = sz.verify(data, decompressed)
+max_err, psnr, nrmse = szo.verify(data, decompressed)
 print(f"Max error: {max_err:.2e}, PSNR: {psnr:.2f} dB, NRMSE: {nrmse:.2e}")
 ```
 
@@ -121,10 +121,10 @@ szoAlgorithm.LORENZO_REG | INTERP_LORENZO | INTERP | NOPRED | LOSSLESS
 szoInterpAlgorithm.LINEAR | CUBIC
 ```
 
-### `sz.compress()`
+### `szo.compress()`
 
 ```python
-sz.compress(data, config) -> (compressed, ratio)
+szo.compress(data, config) -> (compressed, ratio)
 ```
 
 Compress a NumPy array. Dimensions are inferred from the array shape. Runs on a private copy, so `data` is left unchanged.
@@ -133,10 +133,10 @@ Compress a NumPy array. Dimensions are inferred from the array shape. Runs on a 
 - `config` (`szoConfig` or `str`): config object, or a path to a config file
 - returns `compressed` (uint8 ndarray) and `ratio` (original / compressed size)
 
-### `sz.decompress()`
+### `szo.decompress()`
 
 ```python
-sz.decompress(compressed, dtype, shape, config=None) -> (data, config)
+szo.decompress(compressed, dtype, shape, config=None) -> (data, config)
 ```
 
 Decompress back to a NumPy array. The SZo configuration is recovered from the stream, so `config` is optional.
@@ -146,10 +146,10 @@ Decompress back to a NumPy array. The SZo configuration is recovered from the st
 - `shape` (tuple): shape of the original data
 - returns the decompressed `data` and the recovered `config`
 
-### `sz.verify()`
+### `szo.verify()`
 
 ```python
-sz.verify(src_data, dec_data) -> (max_diff, psnr, nrmse)
+szo.verify(src_data, dec_data) -> (max_diff, psnr, nrmse)
 ```
 
 Quality metrics between the original and decompressed arrays: maximum absolute difference, PSNR (dB), and NRMSE.
@@ -162,7 +162,7 @@ Quality metrics between the original and decompressed arrays: maximum absolute d
 config = szoConfig(data.shape)
 config.errorBoundMode = szoErrorBoundMode.REL
 config.relErrorBound  = 1e-4          # 0.01% relative error
-compressed, ratio = sz.compress(data, config)
+compressed, ratio = szo.compress(data, config)
 ```
 
 ### Choosing an algorithm
@@ -181,20 +181,20 @@ data = np.random.randn(50, 50, 50).astype(np.float64)
 config = szoConfig(data.shape)
 config.errorBoundMode = szoErrorBoundMode.ABS
 config.absErrorBound  = 1e-6
-compressed, ratio     = sz.compress(data, config)
-decompressed, config  = sz.decompress(compressed, np.float64, data.shape)
+compressed, ratio     = szo.compress(data, config)
+decompressed, config  = szo.decompress(compressed, np.float64, data.shape)
 ```
 
 ### Save / load compressed data
 
 ```python
 # Compress and save
-compressed, ratio = sz.compress(data, config)
+compressed, ratio = szo.compress(data, config)
 compressed.tofile('data.szo')
 
 # Later: load and decompress
 compressed = np.fromfile('data.szo', dtype=np.uint8)
-decompressed, config = sz.decompress(compressed, np.float32, (8, 8, 128))
+decompressed, config = szo.decompress(compressed, np.float32, (8, 8, 128))
 ```
 
 ## Troubleshooting

@@ -175,8 +175,8 @@ def create_extensions():
             extra_link_args=extra_link_args,
         ),
         Extension(
-            "pyszo.sz",
-            sources=["src/pyszo/sz.pyx"],
+            "pyszo.szo",
+            sources=["src/pyszo/szo.pyx"],
             include_dirs=include_dirs,
             libraries=libraries,
             library_dirs=library_dirs,
