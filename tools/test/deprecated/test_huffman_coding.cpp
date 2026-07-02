@@ -1,4 +1,4 @@
-#include "SZ3/encoder/HuffmanEncoder.hpp"
+#include "SZo/encoder/HuffmanEncoder.hpp"
 #include <vector>
 #include <iostream>
 
@@ -14,7 +14,7 @@ int main() {
 
     unsigned char *compressed = (unsigned char *) malloc(N * sizeof(int));
     {
-        SZ3::HuffmanEncoder<int> encoder;
+        SZo::HuffmanEncoder<int> encoder;
         encoder.preprocess_encode(type, capacity);
         unsigned char *compressed_pos = compressed;
         cout << "save encoder" << endl;
@@ -35,7 +35,7 @@ int main() {
         // }
     }
     {
-        SZ3::HuffmanEncoder<int> encoder;
+        SZo::HuffmanEncoder<int> encoder;
         const unsigned char *compressed_pos = compressed;
         size_t length = sizeof(int);
         cout << "load" << endl;

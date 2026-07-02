@@ -2,7 +2,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "SZ3/api/sz.hpp"
+#include "SZo/api/sz.hpp"
 
 #define SZ_FLOAT 0
 #define SZ_DOUBLE 1
@@ -128,13 +128,13 @@ inline void usage_sz2() {
 }
 
 template <class T>
-void compress(char *inPath, char *cmpPath, SZ3::Config &conf) {
+void compress(char *inPath, char *cmpPath, SZo::Config &conf) {
     T *data = new T[conf.num];
-    SZ3::readfile<T>(inPath, conf.num, data);
+    SZo::readfile<T>(inPath, conf.num, data);
     size_t bytesCap = 2 * conf.num * sizeof(T);
     auto bytes = new char[bytesCap];
 
-    SZ3::Timer timer(true);
+    SZo::Timer timer(true);
     size_t outSize = SZ_compress<T>(conf, data, bytes, bytesCap);
     double compress_time = timer.stop();
 
@@ -144,7 +144,7 @@ void compress(char *inPath, char *cmpPath, SZ3::Config &conf) {
     } else {
         strcpy(outputFilePath, cmpPath);
     }
-    SZ3::writefile(outputFilePath, bytes, outSize);
+    SZo::writefile(outputFilePath, bytes, outSize);
 
     printf("compression ratio = %.2f \n", conf.num * 1.0 * sizeof(T) / outSize);
     printf("compression time = %f\n", compress_time);
@@ -155,11 +155,11 @@ void compress(char *inPath, char *cmpPath, SZ3::Config &conf) {
 }
 
 template <class T>
-void decompress(char *inPath, char *cmpPath, char *decPath, SZ3::Config &conf, int binaryOutput, int printCmpResults) {
+void decompress(char *inPath, char *cmpPath, char *decPath, SZo::Config &conf, int binaryOutput, int printCmpResults) {
     size_t cmpSize;
-    auto cmpData = SZ3::readfile<char>(cmpPath, cmpSize);
+    auto cmpData = SZo::readfile<char>(cmpPath, cmpSize);
 
-    SZ3::Timer timer(true);
+    SZo::Timer timer(true);
     auto decData = SZ_decompress<T>(conf, cmpData.get(), cmpSize);
     double compress_time = timer.stop();
 
@@ -170,16 +170,16 @@ void decompress(char *inPath, char *cmpPath, char *decPath, SZ3::Config &conf, i
         strcpy(outputFilePath, decPath);
     }
     if (binaryOutput == 1) {
-        SZ3::writefile<T>(outputFilePath, decData, conf.num);
+        SZo::writefile<T>(outputFilePath, decData, conf.num);
     } else {
-        SZ3::writeTextFile<T>(outputFilePath, decData, conf.num);
+        SZo::writeTextFile<T>(outputFilePath, decData, conf.num);
     }
     if (printCmpResults) {
         // compute the distortion / compression errors...
         size_t totalNbEle;
-        auto ori_data = SZ3::readfile<T>(inPath, totalNbEle);
+        auto ori_data = SZo::readfile<T>(inPath, totalNbEle);
         assert(totalNbEle == conf.num);
-        SZ3::verify<T>(ori_data.get(), decData, conf.num);
+        SZo::verify<T>(ori_data.get(), decData, conf.num);
     }
     delete[] decData;
 
@@ -234,8 +234,8 @@ int main(int argc, char *argv[]) {
                 usage();
                 exit(0);
             case 'v':
-                printf("SZo Version: %s\n", SZ3_VER);
-                printf("SZo Data Format Version: %s\n", SZ3_DATA_VER);
+                printf("SZo Version: %s\n", SZo_VER);
+                printf("SZo Data Format Version: %s\n", SZo_DATA_VER);
                 printf("\nThird-party libraries copyright notices:\n");
                 printf("----------------------------------------\n");
                 printf("ska_hash:\n");
@@ -393,15 +393,15 @@ int main(int argc, char *argv[]) {
         exit(0);
     }
 
-    SZ3::Config conf;
+    SZo::Config conf;
     if (r2 == 0) {
-        conf = SZ3::Config(r1);
+        conf = SZo::Config(r1);
     } else if (r3 == 0) {
-        conf = SZ3::Config(r2, r1);
+        conf = SZo::Config(r2, r1);
     } else if (r4 == 0) {
-        conf = SZ3::Config(r3, r2, r1);
+        conf = SZo::Config(r3, r2, r1);
     } else {
-        conf = SZ3::Config(r4, r3, r2, r1);
+        conf = SZo::Config(r4, r3, r2, r1);
     }
     conf.openmp = enable_openmp;
     if (compression && conPath != nullptr) {
@@ -425,28 +425,28 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        SZ3::match_enum(errBoundMode, SZ3::EB_MAP, conf.errorBoundMode);
+        SZo::match_enum(errBoundMode, SZo::EB_MAP, conf.errorBoundMode);
         if (strcmp(errBoundMode, "VR_REL") == 0) {
-            conf.errorBoundMode = SZ3::EB_REL;
+            conf.errorBoundMode = SZo::EB_REL;
         }
-        if (conf.errorBoundMode == SZ3::EB_ABS) {
+        if (conf.errorBoundMode == SZo::EB_ABS) {
             if (errBound != nullptr) {
                 conf.absErrorBound = atof(errBound);
             }
-        } else if (conf.errorBoundMode == SZ3::EB_REL) {
+        } else if (conf.errorBoundMode == SZo::EB_REL) {
             if (errBound != nullptr) {
                 conf.relErrorBound = atof(errBound);
             }
-        } else if (conf.errorBoundMode == SZ3::EB_PSNR) {
+        } else if (conf.errorBoundMode == SZo::EB_PSNR) {
             if (errBound != nullptr) {
                 conf.psnrErrorBound = atof(errBound);
             }
-        } else if (conf.errorBoundMode == SZ3::EB_L2NORM) {
+        } else if (conf.errorBoundMode == SZo::EB_L2NORM) {
             if (errBound != nullptr) {
                 conf.l2normErrorBound = atof(errBound);
             }
-        } else if (conf.errorBoundMode == SZ3::EB_ABS_AND_REL) {
-        } else if (conf.errorBoundMode == SZ3::EB_ABS_OR_REL) {
+        } else if (conf.errorBoundMode == SZo::EB_ABS_AND_REL) {
+        } else if (conf.errorBoundMode == SZo::EB_ABS_OR_REL) {
         } else {
             printf("Error: wrong error bound mode setting by using the option '-M'\n");
             usage();
@@ -457,7 +457,7 @@ int main(int argc, char *argv[]) {
     if (compression) {
         if (dataType == SZ_FLOAT) {
             compress<float>(inPath, cmpPath, conf);
-// #if (!SZ3_DEBUG_TIMINGS)
+// #if (!SZo_DEBUG_TIMINGS)
         } else if (dataType == SZ_DOUBLE) {
             compress<double>(inPath, cmpPath, conf);
         } else if (dataType == SZ_INT32) {
@@ -480,7 +480,7 @@ int main(int argc, char *argv[]) {
         if (dataType == SZ_FLOAT) {
 
             decompress<float>(inPath, cmpPath, decPath, conf, binaryOutput, printCmpResults);
-//#if (!SZ3_DEBUG_TIMINGS)
+//#if (!SZo_DEBUG_TIMINGS)
         } else if (dataType == SZ_DOUBLE) {
             decompress<double>(inPath, cmpPath, decPath, conf, binaryOutput, printCmpResults);
         } else if (dataType == SZ_INT32) {

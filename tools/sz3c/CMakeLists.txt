@@ -2,13 +2,13 @@ set(SZOC_TARGET_NAME SZOc)
 
 # Match the standalone szo binary: RleFseEncoder needs the vendored FSE
 # implementation linked into this shared library as well.
-file(GLOB SZOC_ZFSE_SOURCES "${CMAKE_SOURCE_DIR}/include/SZ3/encoder/zfse/*.c")
+file(GLOB SZOC_ZFSE_SOURCES "${CMAKE_SOURCE_DIR}/include/SZo/encoder/zfse/*.c")
 set_source_files_properties(${SZOC_ZFSE_SOURCES} PROPERTIES
     COMPILE_OPTIONS "-fvisibility=hidden")
 
 add_library(${SZOC_TARGET_NAME} src/szo.cpp ${SZOC_ZFSE_SOURCES})
 
-target_link_libraries(${SZOC_TARGET_NAME} PUBLIC SZ3)
+target_link_libraries(${SZOC_TARGET_NAME} PUBLIC SZo)
 
 # Keep the C API shared library on the same SIMD code path as the top-level build.
 if(ENABLE_AVX2)

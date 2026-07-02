@@ -9,7 +9,7 @@ foreach (EXE IN LISTS exes)
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:include/MDZ>
             )
-    target_link_libraries(${EXE} SZ3)
+    target_link_libraries(${EXE} SZo)
     install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/${EXE} TYPE BIN)
 endforeach ()
 

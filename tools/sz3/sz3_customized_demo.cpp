@@ -1,24 +1,24 @@
 /**
- * This is a demo for creating your own compressor in SZ3.
+ * This is a demo for creating your own compressor in SZo.
  * Essentially, there are two main steps: first, you need to implement your own compressor.
  * Please check out the 4 examples provided in the main function for implementing your own compressor.
  *
- * Second, you need to run your compressor with SZ3 executable or a new executable.
+ * Second, you need to run your compressor with SZo executable or a new executable.
  * This demon code is a new executable, so you have control over the parameter parsing, IO, etc.
- * If you want to use the SZ3 executable to run your own compressor, please follow the steps below:
- * 1. Add a new ALGO in SZ3 Config
- * 2. Add a new hpp file in "include/SZ3/api/impl/" to assemble your compressor, one example easy to follow is
- * "include/SZ3/api/impl/SZAlgoNopred.hpp"
- * 3. Add the corresponding code in "include/SZ3/api/impl/SZDispatcher.hpp" to dispatch the new compressor.
- * 4. When executing the SZ3 executable, use -c to specify the config file. The config file should use the new ALGO.
+ * If you want to use the SZo executable to run your own compressor, please follow the steps below:
+ * 1. Add a new ALGO in SZo Config
+ * 2. Add a new hpp file in "include/SZo/api/impl/" to assemble your compressor, one example easy to follow is
+ * "include/SZo/api/impl/SZAlgoNopred.hpp"
+ * 3. Add the corresponding code in "include/SZo/api/impl/SZDispatcher.hpp" to dispatch the new compressor.
+ * 4. When executing the SZo executable, use -c to specify the config file. The config file should use the new ALGO.
  *  Example config file is "tools/sz3/sz3.config".
  */
 
-#include "SZ3/api/sz.hpp"
-using namespace SZ3;
+#include "SZo/api/sz.hpp"
+using namespace SZo;
 
 template <class T, uint N>
-void SZ3_interpolation_compress(Config &conf, T *data, char *dst, size_t &outSize) {
+void SZo_interpolation_compress(Config &conf, T *data, char *dst, size_t &outSize) {
     calAbsErrorBound(conf, data);
 
     auto sz = make_compressor_sz_generic<T, N>(
@@ -28,7 +28,7 @@ void SZ3_interpolation_compress(Config &conf, T *data, char *dst, size_t &outSiz
 }
 
 template <class T, uint N>
-void SZ3_interpolation_decompress(const Config &conf, const char *cmpData, size_t cmpSize, T *decData) {
+void SZo_interpolation_decompress(const Config &conf, const char *cmpData, size_t cmpSize, T *decData) {
     auto cmpDataPos = reinterpret_cast<const uchar *>(cmpData);
     auto sz = make_compressor_sz_generic<T, N>(
         make_decomposition_interpolation<T, N>(conf, LinearQuantizer<T>(conf.absErrorBound, conf.quantbinCnt / 2)),
@@ -76,7 +76,7 @@ class MyDecomposition : public concepts::DecompositionInterface<T, int, N> {
 };
 
 template <class T, uint N>
-void SZ3_customized_compress(Config &conf, T *data, char *dst, size_t &outSize) {
+void SZo_customized_compress(Config &conf, T *data, char *dst, size_t &outSize) {
     calAbsErrorBound(conf, data);
 
     auto sz = make_compressor_sz_generic<T, N>(MyDecomposition<T, N>(conf), HuffmanEncoder<int>(), Lossless_zstd());
@@ -85,7 +85,7 @@ void SZ3_customized_compress(Config &conf, T *data, char *dst, size_t &outSize) 
 }
 
 template <class T, uint N>
-void SZ3_customized_decompress(const Config &conf, const char *cmpData, size_t cmpSize, T *decData) {
+void SZo_customized_decompress(const Config &conf, const char *cmpData, size_t cmpSize, T *decData) {
     auto cmpDataPos = reinterpret_cast<const uchar *>(cmpData);
     auto sz = make_compressor_sz_generic<T, N>(MyDecomposition<T, N>(conf), HuffmanEncoder<int>(), Lossless_zstd());
 
@@ -94,7 +94,7 @@ void SZ3_customized_decompress(const Config &conf, const char *cmpData, size_t c
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        std::cout << "SZ v" << SZ3_VER << std::endl;
+        std::cout << "SZ v" << SZo_VER << std::endl;
         std::cout << "usage: " << argv[0] << " data_file -num_dim dim0 .. dimn ABS" << std::endl;
         std::cout << "example: " << argv[0] << " qmcpack.dat -3 33120 69 69 1e-3" << std::endl;
         return 0;
@@ -121,7 +121,7 @@ int main(int argc, char **argv) {
 
     // prepare input and output buffers
     std::vector<float> input_data(conf.num);
-    SZ3::readfile<float>(argv[1], conf.num, input_data.data());
+    SZo::readfile<float>(argv[1], conf.num, input_data.data());
     std::vector<float> input_data_copy(input_data);
     std::vector<float> dec_data(conf.num);
     auto dec_data_pos = dec_data.data();
@@ -135,10 +135,10 @@ int main(int argc, char **argv) {
     // ================================================================================
     // There are 4 customization examples, you just need to pick up one.
 
-    // Example 1: using SZ3 API defined in SZ3/API/sz.hpp
-    // SZ3 has some built-in compressors with fixed modules, for example, the interpolation compressor uses
+    // Example 1: using SZo API defined in SZo/API/sz.hpp
+    // SZo has some built-in compressors with fixed modules, for example, the interpolation compressor uses
     // interpolation decomposition, linear quantizer, and huffman encoder.
-    // The API takes the SZ3::Config as parameter which allows some basic customization, such as interpolation
+    // The API takes the SZo::Config as parameter which allows some basic customization, such as interpolation
     // method (linear or cubic) and the quantization levels.
     SZ_compress<float>(conf, input_data.data(), cmpData.data(), cmpSize);
     SZ_decompress<float>(conf, cmpData.data(), cmpSize, dec_data_pos);
@@ -148,28 +148,28 @@ int main(int argc, char **argv) {
     // You can use any decomposition, encoder, and lossless modules to form such a compressor, including bypass
     // modules. This example assembles the interpolation compressor with interpolation decomposition, linear
     // quantizer, and huffman encoder. You can change any of the modules to get a new compressor that is not
-    // built-in in SZ3.
-    SZ3_interpolation_compress<float, 3>(conf, input_data.data(), cmpData.data(), cmpSize);
-    SZ3_interpolation_decompress<float, 3>(conf, cmpData.data(), cmpSize, dec_data_pos);
+    // built-in in SZo.
+    SZo_interpolation_compress<float, 3>(conf, input_data.data(), cmpData.data(), cmpSize);
+    SZo_interpolation_decompress<float, 3>(conf, cmpData.data(), cmpSize, dec_data_pos);
 
     // Example 3: using new modules to assemble a generic compressor
     // This is an extension of Example 2, which uses a custom decomposition module instead of built-in ones.
     // MyDecomposition is the new decomposition module, which implements the DecompositionInterface.
     // We put the source code of MyDecomposition here for demonstration purpose.
-    // You should put your new modules in the corresponding module folders (include/SZ3/decomposition for Decomposition
+    // You should put your new modules in the corresponding module folders (include/SZo/decomposition for Decomposition
     // modules).
-    SZ3_customized_compress<float, 3>(conf, input_data.data(), cmpData.data(), cmpSize);
-    SZ3_customized_decompress<float, 3>(conf, cmpData.data(), cmpSize, dec_data_pos);
+    SZo_customized_compress<float, 3>(conf, input_data.data(), cmpData.data(), cmpSize);
+    SZo_customized_decompress<float, 3>(conf, cmpData.data(), cmpSize, dec_data_pos);
 
     // Example 4: assemble a specialized compressor
     // If your compressor doesn't follow the decomposition -> encoding -> lossless pipeline,
     // you can implement your own compressor by implementing the CompressorInterface
-    // Please check out "SZ3/compressor/specialized/SZExaaltCompressor.hpp". It contains two separate encoding process.
+    // Please check out "SZo/compressor/specialized/SZExaaltCompressor.hpp". It contains two separate encoding process.
 
     // ================================================================================
 
-    // In the end, you can use the SZ3 API to verify the decompressed data.
-    SZ3::verify<float>(input_data_copy.data(), dec_data_pos, conf.num);
+    // In the end, you can use the SZo API to verify the decompressed data.
+    SZo::verify<float>(input_data_copy.data(), dec_data_pos, conf.num);
 
     // write compressed data and decompressed data to the same folder as original data
     writefile((src_file_name + ".demo").data(), cmpData.data(), cmpSize);

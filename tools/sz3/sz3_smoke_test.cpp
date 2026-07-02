@@ -2,19 +2,19 @@
 // Created by Kai Zhao on 11/10/22.
 //
 
-#include <SZ3/api/sz.hpp>
+#include <SZo/api/sz.hpp>
 
-#include "SZ3/compressor/specialized/SZTruncateCompressor.hpp"
-#include "SZ3/encoder/ArithmeticEncoder.hpp"
-#include "SZ3/encoder/BypassEncoder.hpp"
-#include "SZ3/encoder/RunlengthEncoder.hpp"
-#include "SZ3/lossless/Lossless_bypass.hpp"
+#include "SZo/compressor/specialized/SZTruncateCompressor.hpp"
+#include "SZo/encoder/ArithmeticEncoder.hpp"
+#include "SZo/encoder/BypassEncoder.hpp"
+#include "SZo/encoder/RunlengthEncoder.hpp"
+#include "SZo/lossless/Lossless_bypass.hpp"
 
 int main(int argc, char **argv) {
     std::vector<size_t> dims({100, 200, 300});
-    SZ3::Config conf({dims[0], dims[1], dims[2]});
-    conf.cmprAlgo = SZ3::ALGO_INTERP_LORENZO;
-    conf.errorBoundMode = SZ3::EB_ABS;  // refer to def.hpp for all supported error bound mode
+    SZo::Config conf({dims[0], dims[1], dims[2]});
+    conf.cmprAlgo = SZo::ALGO_INTERP_LORENZO;
+    conf.errorBoundMode = SZo::EB_ABS;  // refer to def.hpp for all supported error bound mode
     conf.absErrorBound = 1E-3;          // absolute error bound 1e-3
 
     std::vector<float> input_data(conf.num);

@@ -2,7 +2,7 @@
 #include <cstdint>
 
 #include "gtest/gtest.h"
-#include "SZ3/quantizer/LinearQuantizer.hpp"
+#include "SZo/quantizer/LinearQuantizer.hpp"
 
 template <typename Quantizer, typename T>
 void runQuantizeRecoverTest() {
@@ -63,5 +63,5 @@ void runAllTest() {
 }
 
 TEST(QuantizerTest, LinearQuantizer) {
-    runAllTest<SZ3::LinearQuantizer<float>, float>();
+    runAllTest<SZo::LinearQuantizer<float>, float>();
 }

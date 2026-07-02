@@ -78,7 +78,7 @@ target_include_directories(zstd
         ${zstd_SOURCE_DIR}/legacy
 )
 
-install(TARGETS zstd EXPORT SZ3Targets
+install(TARGETS zstd EXPORT SZoTargets
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )

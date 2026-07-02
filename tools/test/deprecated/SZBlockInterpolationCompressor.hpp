@@ -1,25 +1,25 @@
-#ifndef SZ3_BLOCK_INTERPOLATION_COMPRESSOR_HPP
-#define SZ3_BLOCK_INTERPOLATION_COMPRESSOR_HPP
+#ifndef SZo_BLOCK_INTERPOLATION_COMPRESSOR_HPP
+#define SZo_BLOCK_INTERPOLATION_COMPRESSOR_HPP
 
 #include <cmath>
 #include <cstring>
 
-#include "SZ3/def.hpp"
-#include "SZ3/encoder/Encoder.hpp"
-#include "SZ3/lossless/Lossless.hpp"
-#include "SZ3/predictor/Predictor.hpp"
-#include "SZ3/quantizer/Quantizer.hpp"
-#include "SZ3/utils/Config.hpp"
-#include "SZ3/utils/FileUtil.hpp"
-#include "SZ3/utils/Interpolators.hpp"
-#include "SZ3/utils/Iterator.hpp"
-#include "SZ3/utils/MemoryUtil.hpp"
+#include "SZo/def.hpp"
+#include "SZo/encoder/Encoder.hpp"
+#include "SZo/lossless/Lossless.hpp"
+#include "SZo/predictor/Predictor.hpp"
+#include "SZo/quantizer/Quantizer.hpp"
+#include "SZo/utils/Config.hpp"
+#include "SZo/utils/FileUtil.hpp"
+#include "SZo/utils/Interpolators.hpp"
+#include "SZo/utils/Iterator.hpp"
+#include "SZo/utils/MemoryUtil.hpp"
 
 /**
  * DO NOT use this one
  * It will be replaced by QOZ
  */
-namespace SZ3 {
+namespace SZo {
 template <class T, uint N, class Quantizer, class Encoder, class Lossless>
 class SZBlockInterpolationCompressor {
    public:
@@ -484,6 +484,6 @@ class SZBlockInterpolationCompressor {
     std::array<size_t, N> global_dimensions;
 };
 
-}  // namespace SZ3
+}  // namespace SZo
 
 #endif

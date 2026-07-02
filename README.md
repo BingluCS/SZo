@@ -1,38 +1,82 @@
 # SZo: Ultra-Fast and Scalable High-Ratio Scientific Error-Bounded Lossy Compression on CPUs
 
-## Installation
+## Build & install
 
-* mkdir build && cd build
-* cmake -DCMAKE_INSTALL_PREFIX:PATH=[INSTALL_DIR] .. -DENABLE_AVX2=ON
-* make
-* make install
+```bash
+mkdir build && cd build
+cmake -DCMAKE_INSTALL_PREFIX:PATH=[INSTALL_DIR] .. -DENABLE_AVX2=ON
+make
+make install
+```
 
-The DENABLE_AVX2 option enables AVX2 instructions. This requires CPU support but will significantly accelerate performance.
-Then, you'll find all the executables in [INSTALL_DIR]/bin and header files in [INSTALL_DIR]/include
+Executables land in `[INSTALL_DIR]/bin`, headers in `[INSTALL_DIR]/include`.
 
+**SIMD / AVX2**
+* `-DENABLE_AVX2=ON` turns on the AVX2 code paths (x86, needs CPU support) — a large speedup.
+* On ARM use `-DENABLE_SVE2=ON` instead.
+* With neither flag you get a portable scalar build. **Scalar, AVX2 and SVE2 all produce bit-identical output.**
+* The SIMD flag is attached to the `SZo` CMake target, so **everything that links `SZo` inherits it automatically** — the `szo` binary, the `SZOc` C library, and the HDF5 filter. You only set it once, at configure time.
+
+**Optional components**
+* `-DBUILD_H5Z_FILTER=ON` also builds the HDF5 filter (requires the HDF5 development package).
 
 ## How to run
 
-#### SZo Executable
-* You can use the executable 'tools/sz3/szo' to do the compression/decompression.
+### SZo executable
+`tools/sz3/szo` — command-line compression / decompression. Run it with no arguments to see usage.
 
-#### SZo C++ API
-* Located in 'include/SZ3/api/sz.hpp'. 
-* Requiring a modern C++ compiler.  
-* Different with SZ2 API.
+### C++ API
+* Header-only: `#include "SZo/api/sz.hpp"`; everything lives in namespace `SZo`. Needs a C++17 compiler. (Different from the SZ2 API.)
+```cpp
+#include "SZo/api/sz.hpp"
 
-#### SZOc C API
-* Located in 'tools/sz3c/include/szo.h'
-* Compatible with SZ2 API
+SZo::Config conf(dim0, dim1, dim2);          // n-D dimensions
+conf.errorBoundMode = SZo::EB_ABS;
+conf.absErrorBound  = 1e-3;
 
-#### SZ3 Python API
-* available via `pip install pysz`
-* [Source code in 'tools/pysz'](https://github.com/szcompressor/SZ3/tree/master/tools/pysz)
+size_t outSize;
+char  *comp = SZ_compress(conf, data, outSize);          // T* data -> compressed bytes
+T     *dec  = SZ_decompress<T>(conf, comp, outSize);     // -> reconstructed data
+```
+* **AVX2/SVE2:** compile the translation unit that includes the header with `-mavx2 -mfma` (x86) or `-march=armv8.6-a+sve2` (ARM). If you build through this project's CMake, linking the `SZo` target adds the flag for you.
 
-#### H5Z-SZ3
-* Located in 'tools/H5Z-SZ3'
-* Please add "-DBUILD_H5Z_FILTER=ON" to enable this function for CMake.
-* sz3ToHDF5 and HDF5ToSz3 are provided for testing.
+### C API (SZOc)
+* Header `tools/sz3c/include/szo.h`, library target `SZOc`. **Compatible with the SZ2 C API.**
+```c
+#include "szo.h"
+
+size_t outSize;
+unsigned char *comp = SZ_compress_args(SZ_FLOAT, data, &outSize,
+                                       ABS, /*absErr*/1e-3, 0, 0, 0, 0, r3, r2, r1);
+void *dec = SZ_decompress(SZ_FLOAT, comp, outSize, 0, 0, r3, r2, r1);
+free_buf(comp);
+```
+* **AVX2/SVE2:** `SZOc` picks up the SIMD flags automatically when the project is configured with `-DENABLE_AVX2=ON` (or `-DENABLE_SVE2=ON`).
+
+### Python API (pyszo)
+* `pip install pyszo`. [Source in `tools/pyszo`](https://github.com/BingluCS/SZo/tree/master/tools/pyszo).
+```python
+import numpy as np
+from pyszo import sz, szoConfig, szoErrorBoundMode, szoAlgorithm
+
+data   = np.random.rand(100, 200, 300).astype(np.float32)
+config = szoConfig()
+config.errorBoundMode = szoErrorBoundMode.ABS
+config.absErrorBound  = 1e-3
+# optional: config.cmprAlgo = szoAlgorithm.INTERP_LORENZO
+
+compressed, ratio       = sz.compress(data, config)
+decompressed, config    = sz.decompress(compressed, np.float32, data.shape)
+max_err, psnr, nrmse    = sz.verify(data, decompressed.reshape(data.shape))
+```
+* `sz.compress` works on a private copy, so your input array is **left unchanged**. `sz.decompress(data, dtype, shape)` recovers the SZo configuration from the compressed stream, so passing the original `config` is optional.
+* The wheel builds SZo from source; the bundled Zstd and (on x86) the SIMD build options are handled by `setup.py`.
+
+### HDF5 filter (H5Z-SZo)
+* Located in `tools/H5Z-SZo`; library target `hdf5szo`, HDF5 filter id **32024**. Build with `-DBUILD_H5Z_FILTER=ON` (requires HDF5).
+* Add `-DENABLE_AVX2=ON` to vectorize the compression that runs *inside* the filter — the filter's CMake sets the SIMD flags explicitly, so it is AVX2/SVE2-accelerated just like the rest of SZo.
+* `szoToHDF5` and `HDF5ToSzo` (under `tools/H5Z-SZo/test`) are provided for testing — e.g. `szoToHDF5 -f data.dat 100 100 100` writes `data.dat.szo.h5`, and `HDF5ToSzo data.dat.szo.h5` reconstructs it. The type flag is `-f` (float), `-d` (double), or `-i8/-u8/-i16/-u16/-i32/-u32/-i64/-u64` for integers.
+* To use it as a dynamically-loaded HDF5 filter, point `HDF5_PLUGIN_PATH` at the built `libhdf5szo`, then request filter id `32024` on your dataset-creation property list.
 
 
 

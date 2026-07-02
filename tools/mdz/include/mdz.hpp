@@ -2,29 +2,29 @@
 // Created by Kai Zhao on 7/1/21.
 //
 
-#ifndef SZ3_MDZ_H
-#define SZ3_MDZ_H
+#ifndef SZo_MDZ_H
+#define SZo_MDZ_H
 
-#include <SZ3/compressor/SZGenericCompressor.hpp>
-#include <SZ3/def.hpp>
-#include <SZ3/encoder/HuffmanEncoder.hpp>
-#include <SZ3/lossless/Lossless_zstd.hpp>
-#include <SZ3/predictor/ComposedPredictor.hpp>
-#include <SZ3/predictor/LorenzoPredictor.hpp>
-#include <SZ3/predictor/Predictor.hpp>
-#include <SZ3/predictor/RegressionPredictor.hpp>
-#include <SZ3/quantizer/LinearQuantizer.hpp>
-#include <SZ3/utils/FileUtil.hpp>
-#include <SZ3/utils/QuantOptimizatioin.hpp>
-#include <SZ3/utils/Statistic.hpp>
-#include <SZ3/utils/Timer.hpp>
+#include <SZo/compressor/SZGenericCompressor.hpp>
+#include <SZo/def.hpp>
+#include <SZo/encoder/HuffmanEncoder.hpp>
+#include <SZo/lossless/Lossless_zstd.hpp>
+#include <SZo/predictor/ComposedPredictor.hpp>
+#include <SZo/predictor/LorenzoPredictor.hpp>
+#include <SZo/predictor/Predictor.hpp>
+#include <SZo/predictor/RegressionPredictor.hpp>
+#include <SZo/quantizer/LinearQuantizer.hpp>
+#include <SZo/utils/FileUtil.hpp>
+#include <SZo/utils/QuantOptimizatioin.hpp>
+#include <SZo/utils/Statistic.hpp>
+#include <SZo/utils/Timer.hpp>
 
-#include "SZ3/compressor/specialized/SZExaaltCompressor.hpp"
-#include "SZ3/decomposition/BlockwiseDecomposition.hpp"
-#include "SZ3/decomposition/TimeSeriesDecomposition.hpp"
-#include "SZ3/utils/KmeansUtil.hpp"
+#include "SZo/compressor/specialized/SZExaaltCompressor.hpp"
+#include "SZo/decomposition/BlockwiseDecomposition.hpp"
+#include "SZo/decomposition/TimeSeriesDecomposition.hpp"
+#include "SZo/utils/KmeansUtil.hpp"
 
-using namespace SZ3;
+using namespace SZo;
 inline double total_compress_time = 0;
 inline double total_decompress_time = 0;
 inline const char *compressor_names[] = {"VQ", "VQT", "MT", "LR", "TS"};
@@ -452,7 +452,7 @@ inline typename std::enable_if<N == 1 || N == 2, size_t>::type MDZ_Compress(Conf
         memcpy(&dec_data[ts * conf.dims[1]], ts_dec_data, conf.num * sizeof(T));
     }
     if (lossless_first_frame) {
-        auto zstd = SZ3::Lossless_zstd();
+        auto zstd = SZo::Lossless_zstd();
         size_t inSize = conf.dims[1] * sizeof(T);
         uchar *buffer = new uchar[inSize * 2];
         auto cmpSize = zstd.compress(reinterpret_cast<uchar *>(data_ts0.data()), inSize, buffer, inSize * 2);
@@ -497,4 +497,4 @@ inline typename std::enable_if<N == 3, size_t>::type MDZ_Compress(Config conf, T
     return total_compressed_size;
 }
 
-#endif  // SZ3_MDZ_H
+#endif  // SZo_MDZ_H

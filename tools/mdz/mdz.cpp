@@ -25,11 +25,11 @@ int main(int argc, char **argv) {
         dims[i] = atoi(argv[argp++]);
     }
 
-    SZ3::Config conf({1, dims[0]});
+    SZo::Config conf({1, dims[0]});
     if (dim == 2) {
-        conf = SZ3::Config({dims[0], dims[1]});
+        conf = SZo::Config({dims[0], dims[1]});
     } else if (dim == 3) {
-        conf = SZ3::Config({dims[0], dims[1], dims[2]});
+        conf = SZo::Config({dims[0], dims[1], dims[2]});
     }
 
     std::string input_path = argv[1];
@@ -39,10 +39,10 @@ int main(int argc, char **argv) {
     }
     char *eb_op = argv[argp++] + 1;
     if (*eb_op == 'a') {
-        conf.errorBoundMode = SZ3::EB_ABS;
+        conf.errorBoundMode = SZo::EB_ABS;
         conf.absErrorBound = atof(argv[argp++]);
     } else {
-        conf.errorBoundMode = SZ3::EB_REL;
+        conf.errorBoundMode = SZo::EB_REL;
         conf.relErrorBound = atof(argv[argp++]);
     }
     size_t batch_size = 0;
@@ -77,7 +77,7 @@ int main(int argc, char **argv) {
     printf("\nBatch=%lu\nCompression ratio=%.3f\nCompression time=%.3f\nDecompression time=%.3f\n",
            (batch_size == 0 ? dims[0] : batch_size), ratio, total_compress_time, total_decompress_time);
 
-    SZ3::verify<float>(input2.data(), dec_data.data(), conf.num, psnr, nrmse, max_diff);
+    SZo::verify<float>(input2.data(), dec_data.data(), conf.num, psnr, nrmse, max_diff);
     //    std::cout << "****************** Final ****************" << std::endl;
     //    printf("method=md, file=%s, block=%lu, compression_ratio=%.3f, reb=%.1e, eb=%.6f, psnr=%.3f, nsmse=%e,
     //    compress_time=%.3f, decompress_time=%.3f, timestep_op=%d\n",
