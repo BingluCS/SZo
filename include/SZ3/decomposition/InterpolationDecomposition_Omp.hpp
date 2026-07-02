@@ -221,7 +221,10 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
 
         constexpr size_t alignment = 64;          // cache line alignment
         constexpr size_t elems_per_cacheline = alignment / sizeof(int16_t);
-        size_t padded_each_num = ((each_num + elems_per_cacheline - 1) / elems_per_cacheline) * elems_per_cacheline;
+        // +1 extra cacheline of slack per thread: store_quant4/8 write step (up to 8) int16
+        // at a time, so the final SIMD store of a region must not overflow into the next
+        // thread's region (or past the buffer). Mirrors the serial "+16 padding" on quant_inds.
+        size_t padded_each_num = (((each_num + elems_per_cacheline - 1) / elems_per_cacheline) + 1) * elems_per_cacheline;
         total_quant_inds = new (std::align_val_t(alignment)) int16_t[nThreads * padded_each_num];
 
         #pragma omp parallel for
@@ -2434,9 +2437,18 @@ template <COMPMODE CompMode, class QuantizeFunc>
                 }
                 if (n % 2 == 0) {
                     auto cur_ij_offset = offset + (n - 1) * dim_offsets[0] + j * dim_offsets[1];
-                    if(n < 3)
-                        interp_equal_and_quantize<CompMode>(cur_buffer_2, vector_len, 
+                    if(n < 3) {
+                        // n==2: the interior loop above (i in [1, n-1)) never ran, so cur_buffer_2
+                        // still holds stale rows from a prior level/sweep. Fill it with the single
+                        // available neighbor row (below) before predicting, or compress/decompress
+                        // diverge on the leftover buffer contents.
+                        size_t buffer_idx = 0;
+                        for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                            cur_buffer_2[buffer_idx++] = data[cur_ij_offset - stride + k];
+                        }
+                        interp_equal_and_quantize<CompMode>(cur_buffer_2, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
+                    }
                     else {
                         size_t buffer_idx = 0;
                         for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
@@ -2748,16 +2760,23 @@ template <COMPMODE CompMode, class QuantizeFunc>
                 }
                 if (n % 2 == 0) {
                     auto cur_ij_offset = offset + i * dim_offsets[0] + (n - 1) * dim_offsets[1];
-                    if(n < 3)
-                        interp_equal_and_quantize<CompMode>(cur_buffer_2, vector_len, 
+                    if(n < 3) {
+                        // n==2: interior loop skipped, so cur_buffer_2 holds stale rows.
+                        // Fill it with the single available neighbor row (below) before predicting.
+                        size_t buffer_idx = 0;
+                        for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                            cur_buffer_2[buffer_idx++] = data[cur_ij_offset - stride + k];
+                        }
+                        interp_equal_and_quantize<CompMode>(cur_buffer_2, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
+                    }
                     else {
                         size_t buffer_idx = 0;
                         for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
                             auto cur_offset =  cur_ij_offset - stride2x + k;
                            cur_buffer_1[buffer_idx++] = data[cur_offset];
                         }
-                        interp_linear1_and_quantize<CompMode>(cur_buffer_1, cur_buffer_2, vector_len, 
+                        interp_linear1_and_quantize<CompMode>(cur_buffer_1, cur_buffer_2, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
                     }
                 }

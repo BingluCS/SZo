@@ -1021,7 +1021,7 @@ namespace SZ3 {
             _mm256_cmp_pd(quant_avx, nradius_avx, _CMP_GT_OQ),
             _mm256_cmp_pd(quant_avx, radius_avx, _CMP_LT_OQ)
         );
-        quant_avx = _mm256_blendv_pd(nradius_avx, quant_avx, mask);
+        quant_avx = _mm256_blendv_pd(zero_avx_d, quant_avx, mask); // out-of-range -> 0 (valid code) not escape sentinel; matches SVE2/float, fixes unpred-FIFO desync
 
         __m256d decompressed = _mm256_fmadd_pd(quant_avx, ebx2_avx, sum);
         _mm256_storeu_pd(tmp, decompressed);
@@ -1094,16 +1094,17 @@ namespace SZ3 {
             );
             
             quant_avx = _mm256_blendv_ps(nradius_avx_f, quant_avx, mask);
-            // float verify[8];
-            // _mm256_storeu_ps(verify, quant_avx);
+            // escape lanes = those whose FINAL code is the sentinel (-radius): out-of-range OR err-fail.
+            // Decompress marks escapes with the same test (code == -32768), so COMP/DECOMP agree per-lane.
+            __m256 esc_mask = _mm256_cmp_ps(quant_avx, nradius_avx_f, _CMP_EQ_OQ);
             __m256i quant_avx_i = _mm256_cvtps_epi32(quant_avx);
 
             size_t processed = 0;
             if (offset == 1 && full_vector) {
                 processed = step;
-                __m256 out = _mm256_blendv_ps(ori_avx, decompressed, mask);
+                __m256 out = _mm256_blendv_ps(decompressed, ori_avx, esc_mask);  // escape lane -> keep original
                 _mm256_storeu_ps(data + start, out);
-                unsigned esc = (~static_cast<unsigned>(_mm256_movemask_ps(mask))) & ((1u << step) - 1);
+                unsigned esc = static_cast<unsigned>(_mm256_movemask_ps(esc_mask)) & ((1u << step) - 1);
                 if (esc) {
                     _mm256_storeu_ps(ori, ori_avx);
                 }
@@ -1118,7 +1119,7 @@ namespace SZ3 {
                 #pragma unroll
                 for ( ; processed < step && start + processed < len; ++processed)
                     data[(start + processed) * offset] = tmp[processed];
-                unsigned esc = (~static_cast<unsigned>(_mm256_movemask_ps(mask))) & ((1u << processed) - 1);
+                unsigned esc = static_cast<unsigned>(_mm256_movemask_ps(esc_mask)) & ((1u << processed) - 1);
                 while (esc) {
                     int k = __builtin_ctz(esc);
                     data[(start + k) * offset] = ori[k];
@@ -1195,7 +1196,7 @@ namespace SZ3 {
                 _mm256_cmp_pd(quant_avx, nradius_avx, _CMP_GT_OQ),
                 _mm256_cmp_pd(quant_avx, radius_avx, _CMP_LT_OQ)
             );
-            quant_avx = _mm256_blendv_pd(nradius_avx, quant_avx, mask);
+            quant_avx = _mm256_blendv_pd(nradius_avx, quant_avx, mask); // out-of-range -> sentinel placeholder
 
             __m256d decompressed = _mm256_fmadd_pd(quant_avx, ebx2_avx, sum);
             __m256d err_dequan = _mm256_sub_pd(decompressed, ori_avx);
@@ -1205,15 +1206,18 @@ namespace SZ3 {
                     _mm256_cmp_pd(err_dequan, rel_eb_avx_d, _CMP_LE_OQ)
             );
             quant_avx = _mm256_blendv_pd(nradius_avx, quant_avx, mask);
+            // escape lanes = those whose FINAL code is the sentinel (-radius): out-of-range OR err-fail.
+            // Decompress marks escapes with the same test (code == -32768), so COMP/DECOMP agree per-lane.
+            __m256d esc_mask = _mm256_cmp_pd(quant_avx, nradius_avx, _CMP_EQ_OQ);
 
             __m128i quant_avx_i = _mm256_cvtpd_epi32(quant_avx);
 
             size_t processed = 0;
             if (offset == 1 && full_vector) {
                 processed = step;
-                __m256d out = _mm256_blendv_pd(ori_avx, decompressed, mask);
+                __m256d out = _mm256_blendv_pd(decompressed, ori_avx, esc_mask);  // escape lane -> keep original
                 _mm256_storeu_pd(data + start, out);
-                unsigned esc = (~static_cast<unsigned>(_mm256_movemask_pd(mask))) & ((1u << step) - 1);
+                unsigned esc = static_cast<unsigned>(_mm256_movemask_pd(esc_mask)) & ((1u << step) - 1);
                 if (esc) {
                     _mm256_storeu_pd(ori, ori_avx);
                 }
@@ -1228,7 +1232,7 @@ namespace SZ3 {
                 #pragma unroll
                 for ( ; processed < step && start + processed < len; ++processed)
                     data[(start + processed) * offset] = tmp[processed];
-                unsigned esc = (~static_cast<unsigned>(_mm256_movemask_pd(mask))) & ((1u << processed) - 1);
+                unsigned esc = static_cast<unsigned>(_mm256_movemask_pd(esc_mask)) & ((1u << processed) - 1);
                 while (esc) {
                     int k = __builtin_ctz(esc);
                     data[(start + k) * offset] = ori[k];
