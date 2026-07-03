@@ -96,7 +96,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         // std::cout << "pass" << std::endl;
         auto start_level = interp_level;
         if (anchor_stride == 0) {                                               // check whether used anchor points
-            *dec_data += quantizer.recover2(0, local_quant_inds[0][0], 0);  // root code from thread 0, slot 0
+            *dec_data = quantizer.recover2(0, local_quant_inds[0][0], 0);  // root code from thread 0, slot 0
             local_quant_index[0].value = 1;                                 // thread 0's level codes follow the root
         } else {
             recover_anchor_grid2(dec_data);  // recover anchor points, not needed because because all outliers were previously unpacked.
