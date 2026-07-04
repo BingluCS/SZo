@@ -72,8 +72,8 @@ config.errorBoundMode = szoErrorBoundMode.ABS
 config.absErrorBound  = 1e-3
 # optional: config.cmprAlgo = szoAlgorithm.INTERP_LORENZO
 
-# Compress (runs on a private copy — your input array is left unchanged)
-compressed, ratio = szo.compress(data, config)
+# Compress on a private copy so the original array can still be used for verification
+compressed, ratio = szo.compress(data, config, copy=True)
 print(f"Compression ratio: {ratio:.2f}x")
 
 # Decompress (the SZo config is recovered from the stream, so config is optional)
@@ -124,13 +124,14 @@ szoInterpAlgorithm.LINEAR | CUBIC
 ### `szo.compress()`
 
 ```python
-szo.compress(data, config) -> (compressed, ratio)
+szo.compress(data, config, copy=False) -> (compressed, ratio)
 ```
 
-Compress a NumPy array. Dimensions are inferred from the array shape. Runs on a private copy, so `data` is left unchanged.
+Compress a NumPy array. Dimensions are inferred from the array shape. By default (`copy=False`), the NumPy buffer is passed directly to SZo for maximum speed, and `data` may be overwritten in place. The input must be writable and C-contiguous. Pass `copy=True` to compress a private C-contiguous copy and leave `data` unchanged.
 
 - `data` (ndarray): `float32`, `float64`, `int32`, or `int64`
 - `config` (`szoConfig` or `str`): config object, or a path to a config file
+- `copy` (bool): `False` by default for zero-copy compression; `True` preserves the input array
 - returns `compressed` (uint8 ndarray) and `ratio` (original / compressed size)
 
 ### `szo.decompress()`

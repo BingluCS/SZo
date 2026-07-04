@@ -28,7 +28,7 @@ cdef class szo:
     ])
     
     @staticmethod
-    def compress(cnp.ndarray data, config) -> Tuple[cnp.ndarray, float]:
+    def compress(cnp.ndarray data, config, bint copy=False) -> Tuple[cnp.ndarray, float]:
         """
         Compress NumPy array using SZo.
         
@@ -38,6 +38,10 @@ cdef class szo:
             Input data (float32, float64, int32, or int64)
         config : pyConfig or str
             Configuration object or path to config file
+        copy : bool, default False
+            If False, pass the NumPy buffer directly to SZo. This is fastest,
+            but SZo overwrites the input array in place. If True, compress a
+            private C-contiguous copy so the caller's array is left unchanged.
         
         Returns
         -------
@@ -69,11 +73,23 @@ cdef class szo:
         else:
             raise TypeError(f"config must be pyConfig or str, got {type(config)}")
         
-        # SZo reconstructs the decompressed values in place, which would overwrite the
-        # caller's array. Compress a private C-contiguous copy so the input is left intact.
-        data = np.array(data, order='C', copy=True)
+        # SZo reconstructs values in place during compression. By default we pass
+        # the caller's buffer directly; copy=True preserves the old non-mutating behavior.
+        if copy:
+            data = np.array(data, order='C', copy=True)
+        else:
+            if not data.flags['C_CONTIGUOUS']:
+                raise ValueError(
+                    "copy=False requires a C-contiguous array because SZo reads the raw buffer directly; "
+                    "pass copy=True or use np.ascontiguousarray(data)"
+                )
+            if not data.flags['WRITEABLE']:
+                raise ValueError(
+                    "copy=False requires a writable array because SZo compression overwrites input data; "
+                    "pass copy=True to leave the input unchanged"
+                )
 
-        # Get data pointer (points at our private copy, safe to modify in place)
+        # Get data pointer. With copy=False this is the caller's buffer; SZo will mutate it.
         cdef void* data_ptr = <void*> cnp.PyArray_DATA(data)
         cdef size_t original_size = data.nbytes
         

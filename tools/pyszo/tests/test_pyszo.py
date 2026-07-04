@@ -33,8 +33,10 @@ def test_compression():
     
     # Compress
     print("[3] Compressing...")
-    compressed, ratio = szo.compress(data, config)
+    data_original = data.copy()
+    compressed, ratio = szo.compress(data, config, copy=True)
     print(f"    ✓ Ratio: {ratio:.2f}x ({data.nbytes} → {len(compressed)} bytes)")
+    assert np.array_equal(data, data_original), "copy=True should leave input data unchanged"
     
     # Decompress
     print("[4] Decompressing...")
@@ -54,7 +56,7 @@ def test_compression():
     config_double = szoConfig(50, 50)
     config_double.errorBoundMode = szoErrorBoundMode.ABS
     config_double.absErrorBound = 1e-6
-    compressed_d, ratio_d = szo.compress(data_double, config_double)
+    compressed_d, ratio_d = szo.compress(data_double, config_double, copy=True)
     decompressed_d, _ = szo.decompress(compressed_d, data_double.dtype, data_double.shape, config_double)
     max_error_d, _, _ = szo.verify(data_double, decompressed_d)
     print(f"    ✓ Ratio: {ratio_d:.2f}x, Max error: {max_error_d:.2e}")
@@ -66,7 +68,7 @@ def test_compression():
     config_3d = szoConfig(20, 30, 40)
     config_3d.errorBoundMode = szoErrorBoundMode.REL
     config_3d.relErrorBound = 0.001
-    compressed_3d, ratio_3d = szo.compress(data_3d, config_3d)
+    compressed_3d, ratio_3d = szo.compress(data_3d, config_3d, copy=True)
     decompressed_3d, _ = szo.decompress(compressed_3d, data_3d.dtype, data_3d.shape, config_3d)
     max_error_3d, _, _ = szo.verify(data_3d, decompressed_3d)
     print(f"    ✓ Ratio: {ratio_3d:.2f}x, Max error: {max_error_3d:.2e}")
@@ -76,9 +78,27 @@ def test_compression():
     print("=" * 70)
 
 
+def test_compress_default_mutates_input():
+    """copy=False is the default and passes the NumPy buffer directly to SZo."""
+    data = np.random.default_rng(0).normal(size=(100, 100)).astype(np.float32)
+    original = data.copy()
+
+    config = szoConfig(data.shape)
+    config.errorBoundMode = szoErrorBoundMode.ABS
+    config.absErrorBound = 0.01
+
+    compressed, _ = szo.compress(data, config)
+    assert not np.array_equal(data, original), "copy=False should allow SZo to overwrite input data"
+
+    decompressed, _ = szo.decompress(compressed, original.dtype, original.shape)
+    max_error, _, _ = szo.verify(original, decompressed)
+    assert max_error <= config.absErrorBound
+
+
 if __name__ == '__main__':
     try:
         test_compression()
+        test_compress_default_mutates_input()
         sys.exit(0)
     except Exception as e:
         print(f"\n✗ Test failed: {e}")
