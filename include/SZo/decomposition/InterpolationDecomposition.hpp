@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <type_traits>
 #include "Decomposition.hpp"
 #include "SZo/def.hpp"
 #include "SZo/quantizer/Quantizer.hpp"
@@ -1311,8 +1312,10 @@ template <COMPMODE CompMode, class QuantizeFunc>
 #endif
         
         if constexpr (N == 1) {  // mirror the N==2 structure below
-            if constexpr (Tuning == TUNING::DISABLED) {
-                // All builds go through the SIMD 1D path (interpolation_1d_simd ->
+            if constexpr (std::is_integral_v<T>) {
+                return interpolation_1d(data, begin[0], end[0], stride, interp_func, quantize_func);
+            } else if constexpr (Tuning == TUNING::DISABLED) {
+                // Floating builds go through the SIMD 1D path (interpolation_1d_simd ->
                 // interp_*_and_quantize_1D_line, with scalar/AVX2/SVE2 variants). This is
                 // the cross-ISA bit-exact path. The legacy scalar interpolation_1d diverged
                 // from it at boundaries (different edge prediction).
@@ -1327,7 +1330,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
             // size_t max_interp_seq_length = 0;
             //  for (uint i = 0; i < N; ++i) 
             //     max_interp_seq_length = std::max(max_interp_seq_length, (end[i]-begin[i])/stride );
-            if constexpr (Tuning == TUNING::DISABLED) {
+            if constexpr (Tuning == TUNING::DISABLED && !std::is_integral_v<T>) {
                 std::array<size_t, N> strides;
                 std::array<size_t, N> begin_idx = begin, end_idx = end;
                 strides[dims[0]] = 1;
@@ -1382,7 +1385,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                 strides[dims[i]] = stride2x;
             }
 
-            if constexpr (Tuning == TUNING::DISABLED && N == 3) {//avx &&stride<=2
+            if constexpr (Tuning == TUNING::DISABLED && N == 3 && !std::is_integral_v<T>) {//avx &&stride<=2
                 if(direction ==0 ){//xyz
                     predict_error += interpolation_1d_simd_3d_z<CompMode>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
                     begin_idx[1] = begin[1];

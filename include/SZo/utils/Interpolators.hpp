@@ -6,6 +6,7 @@
 #define SZo_INTERPOLATORS_HPP
 
 #include <cmath>
+#include <type_traits>
 #include "SZo/def.hpp"
 
 // Bit-exactness across scalar / AVX2 / SVE2 requires the prediction helpers to NOT be
@@ -19,22 +20,28 @@
 #endif
 
 namespace SZo {
+
 template <class T>
 ALWAYS_INLINE T interp_linear(T a, T b) {
     return (a + b) / 2;
 }
 
-// interp_linear1 / interp_quad_1 / interp_quad_2 / interp_cubic below are written to
-// match the SIMD (AVX2/SVE2) inline op sequence exactly (same order, same FMAs), so
-// the scalar and vectorized paths reconstruct bit-for-bit identically.
+// Floating branches below are written to match the SIMD (AVX2/SVE2) inline op
+// sequence exactly; integral branches mirror SZ3's integer polynomial formulas.
 template <class T>
 ALWAYS_INLINE T interp_linear1(T a, T b) {
+    if constexpr (std::is_integral_v<T>) {
+        return (-a + 3 * b) / 2;
+    }
     // 1.5*b - 0.5*a   (SVE: svmls_n(1.5*b, a, 0.5))
     return std::fma(-T(0.5), a, T(1.5) * b);
 }
 
 template <class T>
 ALWAYS_INLINE T interp_quad_1(T a, T b, T c) {
+    if constexpr (std::is_integral_v<T>) {
+        return (3 * a + 6 * b - c) / 8;
+    }
     // (3a + 6b - c) * 0.125   (SVE: svmla_n(svnmls_n(c,b,6), a, 3) * 0.125)
     T t = std::fma(T(6), b, -c);   // 6*b - c
     t = std::fma(T(3), a, t);      // 3*a + (6*b - c)
@@ -43,6 +50,9 @@ ALWAYS_INLINE T interp_quad_1(T a, T b, T c) {
 
 template <class T>
 ALWAYS_INLINE T interp_quad_2(T a, T b, T c) {
+    if constexpr (std::is_integral_v<T>) {
+        return (-a + 6 * b + 3 * c) / 8;
+    }
     // (-a + 6b + 3c) * 0.125   (SVE: svmla_n(svnmls_n(a,b,6), c, 3) * 0.125)
     T t = std::fma(T(6), b, -a);   // 6*b - a
     t = std::fma(T(3), c, t);      // 3*c + (6*b - a)
@@ -56,6 +66,9 @@ ALWAYS_INLINE T interp_quad_3(T a, T b, T c) {
 
 template <class T>
 ALWAYS_INLINE T interp_cubic(T a, T b, T c, T d) {
+    if constexpr (std::is_integral_v<T>) {
+        return (-a + 9 * b + 9 * c - d) / 16;
+    }
     // ((b+c)*9 - a - d) * 0.0625   (SVE/AVX2 inline order; no FMA)
     T t = (b + c) * T(9);
     t = t - a;

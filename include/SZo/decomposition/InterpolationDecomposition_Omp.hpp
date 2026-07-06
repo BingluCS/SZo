@@ -5,6 +5,7 @@
 #include <omp.h>
 #include <cmath>
 #include <cstring>
+#include <type_traits>
 #include "Decomposition.hpp"
 #include "SZo/def.hpp"
 #include "SZo/quantizer/Quantizer.hpp"
@@ -3109,7 +3110,11 @@ template <COMPMODE CompMode, class QuantizeFunc>
         }
 #endif
         if constexpr (N == 1) {  // old API
-            return interpolation_1d_simd<CompMode>(data, begin[0], end[0], stride, interp_func, quantize_func);
+            if constexpr (std::is_integral_v<T>) {
+                return interpolation_1d(data, begin[0], end[0], stride, interp_func, quantize_func);
+            } else {
+                return interpolation_1d_simd<CompMode>(data, begin[0], end[0], stride, interp_func, quantize_func);
+            }
         } 
         // else if constexpr (N == 2) {  // old API
         //     double predict_error = 0;
@@ -3145,21 +3150,38 @@ template <COMPMODE CompMode, class QuantizeFunc>
                 begin_idx[dims[i]] = (begin[dims[i]] ? begin[dims[i]] + stride2x : 0);
                 strides[dims[i]] = stride2x;
             }
-            if(direction == 0 ){//xy
-                predict_error += interpolation_1d_simd_2d_y<CompMode>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
-                // std::cout << "after x direction" << std::endl;
-                begin_idx[1] = begin[1];
-                begin_idx[0] = (begin[0] ? begin[0] + stride : 0);
-                strides[0] = stride;
-                predict_error += interpolation_1d_simd_2d_x<CompMode>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
-            }
-            else {
-                predict_error += interpolation_1d_simd_2d_x<CompMode>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
-                // std::cout << "after x direction" << std::endl;
-                begin_idx[0] = begin[0];
-                begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
-                strides[1] = stride;
-                predict_error += interpolation_1d_simd_2d_y<CompMode>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+            if constexpr (!std::is_integral_v<T>) {
+                if(direction == 0 ){//xy
+                    predict_error += interpolation_1d_simd_2d_y<CompMode>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                    // std::cout << "after x direction" << std::endl;
+                    begin_idx[1] = begin[1];
+                    begin_idx[0] = (begin[0] ? begin[0] + stride : 0);
+                    strides[0] = stride;
+                    predict_error += interpolation_1d_simd_2d_x<CompMode>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                }
+                else {
+                    predict_error += interpolation_1d_simd_2d_x<CompMode>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                    // std::cout << "after x direction" << std::endl;
+                    begin_idx[0] = begin[0];
+                    begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
+                    strides[1] = stride;
+                    predict_error += interpolation_1d_simd_2d_y<CompMode>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                }
+            } else {
+                for (size_t j = (begin[dims[1]] ? begin[dims[1]] + stride2x : 0); j <= end[dims[1]]; j += stride2x) {
+                    size_t begin_offset =
+                        begin[dims[0]] * original_dim_offsets[dims[0]] + j * original_dim_offsets[dims[1]];
+                    predict_error += interpolation_1d(
+                        data, begin_offset, begin_offset + (end[dims[0]] - begin[dims[0]]) * original_dim_offsets[dims[0]],
+                        stride * original_dim_offsets[dims[0]], interp_func, quantize_func);
+                }
+                for (size_t i = (begin[dims[0]] ? begin[dims[0]] + stride : 0); i <= end[dims[0]]; i += stride) {
+                    size_t begin_offset =
+                        i * original_dim_offsets[dims[0]] + begin[dims[1]] * original_dim_offsets[dims[1]];
+                    predict_error += interpolation_1d(
+                        data, begin_offset, begin_offset + (end[dims[1]] - begin[dims[1]]) * original_dim_offsets[dims[1]],
+                        stride * original_dim_offsets[dims[1]], interp_func, quantize_func);
+                }
             }
             // std::cout << "after y direction" << std::endl;
             // const std::array<int, N> dims = dim_sequences[direction];
@@ -3193,7 +3215,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                 begin_idx[dims[i]] = (begin[dims[i]] ? begin[dims[i]] + stride2x : 0);
                 strides[dims[i]] = stride2x;
             }
-            if (N == 3){//avx 
+            if constexpr (N == 3 && !std::is_integral_v<T>){//avx
                 if(direction == 0 ){//xyz
                     predict_error += interpolation_1d_simd_3d_z<CompMode>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
                     //predict_error += interpolation_1d_fastest_dim_first(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
