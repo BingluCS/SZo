@@ -310,7 +310,7 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
     // }
 
     // ---- order-1 model constants (context buckets + tANS byte alphabet) ----
-    static constexpr int O1_NCTX = 31;
+    static constexpr int O1_NCTX = 11;
     static constexpr int O1T_PB = 11;                  // tANS: FSE tableLog (libzstd build caps FSE_MAX_TABLELOG=11)
     static constexpr uint32_t O1T_M = 1u << O1T_PB;    // 2048
     static constexpr int O1T_NSYM = 256;               // tANS: FSE byte alphabet; 255 = escape (|code|>=128)
