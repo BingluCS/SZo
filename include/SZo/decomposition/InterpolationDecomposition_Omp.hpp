@@ -46,7 +46,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         //std::cout<<"max threads: "<<default_nThreads<<std::endl;
 
         size_t max_usable_threads = default_nThreads;
-        for (uint i = 1; i < N; ++i) 
+        for (uint i = 1; i < N; ++i)
             max_usable_threads = std::min(max_usable_threads, original_dimensions[i]);
         omp_set_num_threads(max_usable_threads);
 
@@ -78,7 +78,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         timer.stop("buffer init");
         timer.start();
 #endif
-        
+
         // this->quant_inds = quant_inds;
         double eb = quantizer.get_eb();
         //visited.resize(num_elements);
@@ -138,10 +138,18 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                         end_idx[i] = original_dimensions[i] - 1;
                     }
                 }
-                interpolation<COMPMODE::DECOMP>(
-                    dec_data, block.get_global_index(), end_idx, interpolators[interp_id],
-                    [&](size_t idx, T &d, T pred, int tid) { d = quantizer.recover2(pred, local_quant_inds[tid][local_quant_index[tid].value++], tid);},// no need to use idx. the outliers will be unpacked separately (todo).
-                    direction_sequence_id, stride);
+                auto recover_and_save = [&](size_t idx, T &d, T pred, int tid) {
+                    d = quantizer.recover2(pred, local_quant_inds[tid][local_quant_index[tid].value++], tid);
+                };
+                if (level == 1) {
+                    interpolation<COMPMODE::DECOMP, true>(
+                        dec_data, block.get_global_index(), end_idx, interpolators[interp_id],
+                        recover_and_save, direction_sequence_id, stride);
+                } else {
+                    interpolation<COMPMODE::DECOMP, false>(
+                        dec_data, block.get_global_index(), end_idx, interpolators[interp_id],
+                        recover_and_save, direction_sequence_id, stride);
+                }
             }
 
         }
@@ -170,7 +178,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         Timer timer(true);
 #endif
         std::copy_n(conf.dims.begin(), N, original_dimensions.begin());
-        
+
         interp_id = conf.interpAlgo;
         direction_sequence_id = conf.interpDirection;
         anchor_stride = conf.interpAnchorStride;
@@ -184,7 +192,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         //std::cout<<"max threads: "<<default_nThreads<<std::endl;
 
         size_t max_usable_threads = default_nThreads;
-        for (uint i = 1; i < N; ++i) 
+        for (uint i = 1; i < N; ++i)
             max_usable_threads = std::min(max_usable_threads, original_dimensions[i]);
         omp_set_num_threads(max_usable_threads);
 
@@ -216,8 +224,8 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
 #endif
         int16_t** local_quant_inds_vec = new int16_t*[nThreads];
         CacheLineInt* local_quant_index_vec = new CacheLineInt[nThreads];
-        
-        int each_num = (num_elements / nThreads) << (nThreads == 1 ? 0 : 2);  
+
+        int each_num = (num_elements / nThreads) << (nThreads == 1 ? 0 : 2);
         quantizer.init_local_unpred(nThreads, each_num);
 
         constexpr size_t alignment = 64;          // cache line alignment
@@ -297,16 +305,21 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                     }
                 }
 
-                interpolation<COMPMODE::COMP>(
-                    data, block.get_global_index(), end_idx, interpolators[interp_id],
-                    [&](size_t idx, T &d, T pred, int tid) {
+                auto quantize_and_save = [&](size_t idx, T &d, T pred, int tid) {
                         int quant_val = quantizer.quantize_and_overwrite2(d, pred, tid);
                         local_quant_inds[tid][local_quant_index[tid].value++] = quant_val;
                         // (quantizer.quantize_and_overwrite2(d, pred, tid));
                         // quant_inds[idx] = (quantizer.quantize_and_overwrite(d, pred, idx));
-                       
-                    },
-                    direction_sequence_id, stride);
+                };
+                if (level == 1) {
+                    interpolation<COMPMODE::COMP, true>(
+                        data, block.get_global_index(), end_idx, interpolators[interp_id],
+                        quantize_and_save, direction_sequence_id, stride);
+                } else {
+                    interpolation<COMPMODE::COMP, false>(
+                        data, block.get_global_index(), end_idx, interpolators[interp_id],
+                        quantize_and_save, direction_sequence_id, stride);
+                }
             }
         }
 #ifdef SZo_PRINT_TIMINGS
@@ -338,7 +351,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         write(anchor_stride, c);
         write(eb_alpha, c);
         write(eb_beta, c);
-        
+
 
         quantizer.save(c);
     }
@@ -351,7 +364,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         write(anchor_stride, c);
         write(eb_alpha, c);
         write(eb_beta, c);
-        
+
 
         quantizer.save2(c);
     }
@@ -368,7 +381,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         read(anchor_stride, c, remaining_length);
         read(eb_alpha, c, remaining_length);
         read(eb_beta, c, remaining_length);
-        
+
 
         quantizer.load(c, remaining_length);
     }
@@ -394,8 +407,24 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     std::pair<int, int> get_out_range() override { return quantizer.get_out_range(); }
 
    private:
+    template <COMPMODE CompMode, bool SkipOverwrite>
+    ALWAYS_INLINE void quantize_point(size_t idx, T &d, T pred, int tid) {
+        (void)idx;
+        if constexpr (CompMode == COMPMODE::COMP) {
+            int quant_val;
+            if constexpr (SkipOverwrite) {
+                quant_val = quantizer.quantize_without_overwrite2(d, pred, tid);
+            } else {
+                quant_val = quantizer.quantize_and_overwrite2(d, pred, tid);
+            }
+            local_quant_inds[tid][local_quant_index[tid].value++] = quant_val;
+        } else {
+            d = quantizer.recover2(pred, local_quant_inds[tid][local_quant_index[tid].value++], tid);
+        }
+    }
+
     void init() {
-       
+
         radius = quantizer.get_out_range().second / 2;
         //assert(blocksize % 2 == 0 && "Interpolation block size should be even numbers");
         assert((anchor_stride & anchor_stride - 1) == 0 && "Anchor stride should be 0 or 2's exponentials");
@@ -429,7 +458,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         nradius_avx = _mm256_set1_pd(-radius);
         zero_avx_d = _mm256_set1_pd(0);
 
-                
+
         if constexpr (std::is_same_v<T, float>) {
             nradius_avx_f = _mm256_set1_ps(-radius);   // int16 escape sentinel = -radius = -32768
         }
@@ -449,21 +478,21 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         } while (std::next_permutation(sequence.begin(), sequence.end()));
         /*
         if constexpr (N==3){
-       
+
             auto d_size = original_dimensions;
             reduced_dim_offsets.resize(interp_level );
             level_prefix.resize(interp_level , 0);
-            
+
             int level = 0;
             while(level < interp_level){
                 //grid_leaps[level][0] = 1;
                 reduced_dim_offsets[level][2] = 1;
                 reduced_dim_offsets[level][1] = d_size[2];
                 reduced_dim_offsets[level][0] = d_size[1] * d_size[2];
-              
-               
-                
-                
+
+
+
+
                 if(level + 1 < interp_level ){
                     d_size[0] = (d_size[0] + 1) >> 1;
                     d_size[1] = (d_size[1] + 1) >> 1;
@@ -471,14 +500,14 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                     level_prefix[level] = d_size[0] *  d_size[1] * d_size[2];
                 }
                 ++level;
-            }  
+            }
         }*/
-         
+
 
 
     }
 
-    void build_anchor_grid(T *data) {  // store anchor points. steplength: anchor_stride on each dimension 
+    void build_anchor_grid(T *data) {  // store anchor points. steplength: anchor_stride on each dimension
         std::array<size_t, N> strides;
         std::array<size_t, N> begins{0};
         std::fill(strides.begin(), strides.end(), anchor_stride);
@@ -487,13 +516,13 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                    [&](T *d) { auto idx = d - data; quantizer.save_unpred( *d, idx);});
     }
 
-    void build_anchor_grid2(T *data) {  // store anchor points. steplength: anchor_stride on each dimension 
+    void build_anchor_grid2(T *data) {  // store anchor points. steplength: anchor_stride on each dimension
         std::array<size_t, N> strides;
         std::array<size_t, N> begins{0};
         std::fill(strides.begin(), strides.end(), anchor_stride);
         foreach_omp2
             <T, N>(data, 0, begins, original_dimensions, strides, original_dim_offsets,
-                   [&](T *d, int tid) {quantizer.save_unpred2(*d, tid);}); //local_quant_inds[0][local_quant_index[0].value++] = 
+                   [&](T *d, int tid) {quantizer.save_unpred2(*d, tid);}); //local_quant_inds[0][local_quant_index[0].value++] =
     }
 
     void recover_anchor_grid(T *data) {  // recover anchor points. steplength: anchor_stride on each dimension
@@ -666,7 +695,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
             for (auto boundary : boundaries) {
                 begins[direction] = boundary;
                 ends[direction] = boundary + 1;
-                
+
                 foreach_omp2 //todo: this is infficient when direction = 0
                     <T, N>(data, offset, begins, ends, strides, dim_offsets, [&](T *d, int tid) {
                         if (boundary >= 3) {
@@ -683,14 +712,14 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                             if (boundary + 3 < n)
                                 quantize_func(d - data, *d,
                                               interp_quad_1(*(d - stride), *(d + stride), *(d + stride3x)), tid);
-                            
+
                             else if (boundary + 1 < n)
-                               
+
                                 quantize_func(d - data, *d, interp_linear(*(d - stride), *(d + stride)), tid);
-                            
+
                             else
                                 quantize_func(d - data, *d, *(d - stride), tid);
-                            
+
                         }
                     });
             }
@@ -703,7 +732,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
 
     //     __m256d quant_avx_low  = _mm256_cvtps_pd(_mm256_castps256_ps128(quant_avx));
     //     quant_avx_low  = _mm256_round_pd(_mm256_mul_pd(quant_avx_low,  ebx2_r_avx),  _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-        
+
     //     __m256d mask_low = _mm256_and_pd(
     //         _mm256_cmp_pd(quant_avx_low, nradius_avx, _CMP_GT_OQ),
     //         _mm256_cmp_pd(quant_avx_low, radius_avx, _CMP_LT_OQ)
@@ -717,7 +746,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //         _mm256_cmp_pd(quant_avx_high, radius_avx, _CMP_LT_OQ)
     //     );
     //     quant_avx_high = _mm256_blendv_pd(zero_avx_d, quant_avx_high, mask_high);
-        
+
     //     // dequantization for decompression
     //     __m256d decompressed_low = _mm256_fmadd_pd(quant_avx_low, ebx2_avx,
     //                             _mm256_cvtps_pd(_mm256_castps256_ps128(sum)));
@@ -735,20 +764,20 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //     quant_avx = _mm256_add_ps(quant_avx, radius_avx_f);
 
     //     _mm256_storeu_ps(tmp, decompressed);
-        
+
     //     __m256 mask = _mm256_and_ps(
     //             _mm256_cmp_ps(err_dequan, nrel_eb_avx_f, _CMP_GE_OQ),
     //             _mm256_cmp_ps(err_dequan, rel_eb_avx_f, _CMP_LE_OQ)
     //     );
-        
+
     //     quant_avx = _mm256_blendv_ps(zero_avx_f, quant_avx, mask);
     // }
 
-    
+
     // template<typename U = T, typename = std::enable_if_t<std::is_same_v<U, double>>>
     // ALWAYS_INLINE void quantize_1D_double (__m256d& sum, __m256d& ori_avx, __m256d& quant_avx, T tmp[4]) {
     //     quant_avx = _mm256_round_pd(_mm256_mul_pd(quant_avx,  ebx2_r_avx),  _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-        
+
     //     __m256d mask = _mm256_and_pd(
     //         _mm256_cmp_pd(quant_avx, nradius_avx, _CMP_GT_OQ),
     //         _mm256_cmp_pd(quant_avx, radius_avx, _CMP_LT_OQ)
@@ -768,8 +797,8 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     // }
 
 
-    // template <COMPMODE CompMode, class QuantizeFunc>
-    // ALWAYS_INLINE void interp_linear_and_quantize_1D(const T * buf, const size_t &len, T* data, 
+    // template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
+    // ALWAYS_INLINE void interp_linear_and_quantize_1D(const T * buf, const size_t &len, T* data,
     //     size_t&  offset, size_t& cur_ij_offset, int& tid, QuantizeFunc &&quantize_func) {
     //     if(len == 1)
     //         return;
@@ -781,13 +810,13 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //     if constexpr (std::is_same_v<T, float>) {
     //         const size_t step = AVX_256_parallelism;
     //         const __m256 factor = _mm256_set1_ps(0.5f);
-        
+
     //         for (; i + 1  <= even_len; i += step) { // 3 is not AVX_256_parallelism - 1 !!
     //             // predict
     //             __m256 va = _mm256_loadu_ps(buf + i );
     //             __m256 vb = _mm256_loadu_ps(buf + i + 1);
-    //             __m256 sum = _mm256_add_ps(va, vb);                        
-    //             sum = _mm256_mul_ps(sum, factor);        
+    //             __m256 sum = _mm256_add_ps(va, vb);
+    //             sum = _mm256_mul_ps(sum, factor);
 
     //             // quantize
     //             size_t start = (i << 1) + 1;
@@ -818,11 +847,11 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //                 size_t j = 0;
     //                 #pragma unroll
     //                 for ( ; j < step && i + j + 1 < odd_len; ++j) {
-    //                     if (quant_vals[j] != 0) 
+    //                     if (quant_vals[j] != 0)
     //                         data[(start + (j << 1)) * offset] = tmp[j];
     //                     else
     //                         quantizer.save_unpred2(ori[j], tid);
-    //                    
+    //
     //                 }
     //                 _mm256_storeu_si256(
     //                     reinterpret_cast<__m256i*>(local_quant_inds[tid] + local_quant_index[tid].value),
@@ -836,10 +865,10 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //                 int quant_vals[8];
     //                 _mm256_storeu_si256(reinterpret_cast<__m256i*>(quant_vals), quant_avx_i);
     //                 quant_avx_i = _mm256_sub_epi32(quant_avx_i, radius_avx_256i);
-                    
+
     //                 __m256d decompressed_low  = _mm256_cvtepi32_pd(_mm256_castsi256_si128(quant_avx_i));
     //                 decompressed_low = _mm256_mul_pd(decompressed_low, ebx2_avx);
-                    
+
     //                 __m256d decompressed_high = _mm256_cvtepi32_pd(_mm256_extracti128_si256(quant_avx_i, 1));
     //                 decompressed_high = _mm256_mul_pd(decompressed_high, ebx2_avx);
 
@@ -849,12 +878,12 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //                 decompressed = _mm256_add_ps(decompressed, sum);
     //                 float tmp[8];
     //                 _mm256_storeu_ps(tmp, decompressed);
-                    
+
     //                 size_t j = 0;
     //                 for ( ; j < step && i + j + 1< odd_len; ++j) {
-    //                     if (quant_vals[j] != 0) 
+    //                     if (quant_vals[j] != 0)
     //                         data[(start + (j << 1)) * offset] = tmp[j];
-    //                     else 
+    //                     else
     //                         data[(start + (j << 1)) * offset] = quantizer.recover_unpred2(tid);
     //                 }
     //                 local_quant_index[tid].value += j;
@@ -864,13 +893,13 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //     else if constexpr (std::is_same_v<T, double>) {
     //         const size_t step = AVX_256_parallelism;
     //         const __m256d factor = _mm256_set1_pd(0.5);
-            
+
     //         for (; i + 1 <= even_len; i += step) { // 3 is not AVX_256_parallelism - 1 !!
     //             __m256d va = _mm256_loadu_pd(buf + i);
     //             __m256d vb = _mm256_loadu_pd(buf + i + 1);
 
-    //             __m256d sum = _mm256_add_pd(va, vb);   
-    //             sum = _mm256_mul_pd(sum, factor);    
+    //             __m256d sum = _mm256_add_pd(va, vb);
+    //             sum = _mm256_mul_pd(sum, factor);
 
     //             size_t start = (i << 1) + 1;
     //             if constexpr (CompMode == COMPMODE::COMP) {
@@ -890,15 +919,15 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
 
     //                 int quant_vals[4];
     //                 __m128i quant_avx_i = _mm256_cvtpd_epi32(quant_avx);
-                    
+
     //                 _mm_storeu_si128(reinterpret_cast<__m128i*>(quant_vals), quant_avx_i);
     //                 size_t j = 0;
     //                 for ( ; j < step && i + j + 1 < odd_len; ++j) {
     //                     if (quant_vals[j] != 0)
     //                         data[(start + (j << 1)) * offset] = tmp[j];
-    //                     else 
+    //                     else
     //                         quantizer.save_unpred2(ori[j], tid);
-    //                    
+    //
     //                 }
     //                 _mm_storeu_si128(
     //                     reinterpret_cast<__m128i*>(local_quant_inds[tid] + local_quant_index[tid].value),
@@ -913,19 +942,19 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //                 _mm_storeu_si128(reinterpret_cast<__m128i*>(quant_vals), quant_avx_i);
     //                 quant_avx_i = _mm_sub_epi32(quant_avx_i, radius_avx_128i);
 
-    //                 __m256d decompressed = _mm256_fmadd_pd(_mm256_cvtepi32_pd(quant_avx_i), 
+    //                 __m256d decompressed = _mm256_fmadd_pd(_mm256_cvtepi32_pd(quant_avx_i),
     //                                         ebx2_avx, sum);
     //                 T tmp[4];
     //                 _mm256_storeu_pd(tmp, decompressed);
-                    
+
     //                 size_t j = 0;
     //                 for ( ; j < step && i + j + 1 < odd_len; ++j) {
-    //                     if (quant_vals[j] != 0) 
+    //                     if (quant_vals[j] != 0)
     //                         data[(start + (j << 1)) * offset] = tmp[j];
     //                     else
     //                         data[(start + (j << 1)) * offset] = quantizer.recover_unpred2(tid);
     //                 }
-    //                 local_quant_index[tid].value += j;  
+    //                 local_quant_index[tid].value += j;
     //             }
 
     //         }
@@ -933,15 +962,15 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //     T pred_edge;
     //     if(len < 3 )
     //         pred_edge = buf[even_len - 1];
-    //     else 
+    //     else
     //         pred_edge = interp_linear1(buf[even_len - 2], buf[even_len - 1]);
     //     int last = 2 * odd_len - 1;
-    //     quantize_func(cur_ij_offset + last * offset , data[last * offset], pred_edge, tid);
+    //     quantize_point<CompMode, SkipOverwrite>(cur_ij_offset + last * offset , data[last * offset], pred_edge, tid);
     // }
 
-    
-    // template <COMPMODE CompMode, class QuantizeFunc>
-    // ALWAYS_INLINE void interp_cubic_and_quantize_1D(const T * buf, const size_t &len, T* data, 
+
+    // template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
+    // ALWAYS_INLINE void interp_cubic_and_quantize_1D(const T * buf, const size_t &len, T* data,
     //     size_t&  offset, size_t& cur_ij_offset, int& tid, QuantizeFunc &&quantize_func) {
     //    // assert(len <= max_dim);
     //     if(len == 1)
@@ -949,15 +978,15 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
 
     //     auto odd_len = len / 2;
     //     auto even_len = len - odd_len;
-        
-    //     T pred_first; 
+
+    //     T pred_first;
     //     if(even_len < 2)
     //         pred_first = (buf[0]);
     //     else if(even_len < 3)
     //         pred_first = interp_linear(buf[0], buf[1]);
-    //     else 
+    //     else
     //         pred_first = interp_quad_1(buf[0], buf[1], buf[2]);
-    //     quantize_func(cur_ij_offset + offset , data[offset], pred_first, tid);
+    //     quantize_point<CompMode, SkipOverwrite>(cur_ij_offset + offset , data[offset], pred_first, tid);
 
     //     size_t i = 0;
     //     if constexpr (std::is_same_v<T, float>) {
@@ -971,11 +1000,11 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256 vc = _mm256_loadu_ps(buf + i + 2);
     //             __m256 vd = _mm256_loadu_ps(buf + i + 3);
 
-    //              __m256 sum = _mm256_add_ps(vb, vc); 
-    //              sum = _mm256_mul_ps(sum, nine); 
-    //              sum = _mm256_sub_ps(sum, va); 
-    //             sum = _mm256_sub_ps(sum, vd);                       
-    //             sum = _mm256_mul_ps(sum, factor);        
+    //              __m256 sum = _mm256_add_ps(vb, vc);
+    //              sum = _mm256_mul_ps(sum, nine);
+    //              sum = _mm256_sub_ps(sum, va);
+    //             sum = _mm256_sub_ps(sum, vd);
+    //             sum = _mm256_mul_ps(sum, factor);
 
     //             size_t start = (i << 1) + 3;
 
@@ -1004,13 +1033,13 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //                 _mm256_storeu_si256(reinterpret_cast<__m256i*>(quant_vals), quant_avx_i);
     //                 size_t j = 0;
     //                 for ( ; j < step && i + j + 3 < even_len; ++j) {
-    //                     if (quant_vals[j] != 0) 
+    //                     if (quant_vals[j] != 0)
     //                         data[(start + (j << 1)) * offset] = tmp[j];
     //                     else
     //                         quantizer.save_unpred2(ori[j], tid);
-    //                    
+    //
     //                 }
-                    
+
     //                 _mm256_storeu_si256(
     //                     reinterpret_cast<__m256i*>(local_quant_inds[tid] + local_quant_index[tid].value),
     //                     quant_avx_i
@@ -1023,10 +1052,10 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //                 int quant_vals[8];
     //                 _mm256_storeu_si256(reinterpret_cast<__m256i*>(quant_vals), quant_avx_i);
     //                 quant_avx_i = _mm256_sub_epi32(quant_avx_i, radius_avx_256i);
-                    
+
     //                 __m256d decompressed_low  = _mm256_cvtepi32_pd(_mm256_castsi256_si128(quant_avx_i));
     //                 decompressed_low = _mm256_mul_pd(decompressed_low, ebx2_avx);
-                    
+
     //                 __m256d decompressed_high = _mm256_cvtepi32_pd(_mm256_extracti128_si256(quant_avx_i, 1));
     //                 decompressed_high = _mm256_mul_pd(decompressed_high, ebx2_avx);
 
@@ -1036,15 +1065,15 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //                 decompressed = _mm256_add_ps(decompressed, sum);
     //                 float tmp[8];
     //                 _mm256_storeu_ps(tmp, decompressed);
-                    
+
     //                 size_t j = 0;
     //                 for ( ; j < step && i + j + 3 < even_len; ++j) {
-    //                     if (quant_vals[j] != 0) 
+    //                     if (quant_vals[j] != 0)
     //                         data[(start + (j << 1)) * offset] = tmp[j];
-    //                     else 
+    //                     else
     //                         data[(start + (j << 1)) * offset] = quantizer.recover_unpred2(tid);
     //                 }
-    //                 local_quant_index[tid].value += j;              
+    //                 local_quant_index[tid].value += j;
     //             }
     //         }
     //     }
@@ -1059,11 +1088,11 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256d vc = _mm256_loadu_pd(buf + i + 2);
     //             __m256d vd = _mm256_loadu_pd(buf + i + 3);
 
-    //             __m256d sum = _mm256_add_pd(vb, vc); 
-    //              sum = _mm256_mul_pd(sum, nine); 
-    //              sum = _mm256_sub_pd(sum, va); 
-    //             sum = _mm256_sub_pd(sum, vd); 
-    //             sum = _mm256_mul_pd(sum, factor);    
+    //             __m256d sum = _mm256_add_pd(vb, vc);
+    //              sum = _mm256_mul_pd(sum, nine);
+    //              sum = _mm256_sub_pd(sum, va);
+    //             sum = _mm256_sub_pd(sum, vd);
+    //             sum = _mm256_mul_pd(sum, factor);
     //             // _mm256_storeu_pd(p + i + 1, sum);
     //             size_t start = (i << 1) + 3;
     //             // T pred[4];
@@ -1086,15 +1115,15 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
 
     //                 int quant_vals[4];
     //                 __m128i quant_avx_i = _mm256_cvtpd_epi32(quant_avx);
-                    
+
     //                 _mm_storeu_si128(reinterpret_cast<__m128i*>(quant_vals), quant_avx_i);
     //                 size_t j = 0;
     //                 for ( ; j < step && i + j + 3 < even_len; ++j) {
     //                     if (quant_vals[j] != 0)
     //                         data[(start + (j << 1)) * offset] = tmp[j];
-    //                     else 
+    //                     else
     //                         quantizer.save_unpred2(ori[j], tid);
-    //                    
+    //
     //                 }
     //                 _mm_storeu_si128(
     //                     reinterpret_cast<__m128i*>(local_quant_inds[tid] + local_quant_index[tid].value),
@@ -1109,29 +1138,29 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //                 _mm_storeu_si128(reinterpret_cast<__m128i*>(quant_vals), quant_avx_i);
     //                 quant_avx_i = _mm_sub_epi32(quant_avx_i, radius_avx_128i);
 
-    //                 __m256d decompressed = _mm256_fmadd_pd(_mm256_cvtepi32_pd(quant_avx_i), 
+    //                 __m256d decompressed = _mm256_fmadd_pd(_mm256_cvtepi32_pd(quant_avx_i),
     //                                         ebx2_avx, sum);
     //                 T tmp[4];
     //                 _mm256_storeu_pd(tmp, decompressed);
-                    
+
     //                 size_t j = 0;
     //                 for ( ; j < step && i + j + 3 < even_len; ++j) {
-    //                     if (quant_vals[j] != 0) 
+    //                     if (quant_vals[j] != 0)
     //                         data[(start + (j << 1)) * offset] = tmp[j];
     //                     else
     //                         data[(start + (j << 1)) * offset] = quantizer.recover_unpred2(tid);
     //                 }
-    //                 local_quant_index[tid].value += j;  
+    //                 local_quant_index[tid].value += j;
     //             }
     //         }
     //     }
     //     if(odd_len > 1){
-    //         if(odd_len < even_len){//the only boundary is p[len- 1] 
+    //         if(odd_len < even_len){//the only boundary is p[len- 1]
     //             //odd_len < even_len so even_len > 2
     //             T edge_pred;
     //             edge_pred = interp_quad_2(buf[even_len - 3], buf[even_len - 2], buf[even_len - 1]);
     //             int last = 2 * odd_len - 1;
-    //             quantize_func(cur_ij_offset + last * offset, data[last * offset], edge_pred, tid);
+    //             quantize_point<CompMode, SkipOverwrite>(cur_ij_offset + last * offset, data[last * offset], edge_pred, tid);
 
     //         }
     //         else{//the boundary points are is p[len -2 ] and p[len -1 ]
@@ -1140,25 +1169,25 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //              //odd_len = even_len so even_len > 2
     //                 edge_pred = interp_quad_2(buf[even_len - 3],  buf[even_len - 2], buf[even_len - 1]);
     //                 int last = 2 * odd_len - 3;
-    //                 quantize_func(cur_ij_offset + last * offset, data[last * offset], edge_pred, tid);
+    //                 quantize_point<CompMode, SkipOverwrite>(cur_ij_offset + last * offset, data[last * offset], edge_pred, tid);
     //             }
     //             //len -1
     //             //odd_len = even_len so even_len > 1
     //                 edge_pred = interp_linear1(buf[even_len - 2], buf[even_len - 1]);
     //                 int last = 2 * odd_len - 1;
-    //                 quantize_func(cur_ij_offset + last * offset, data[last * offset], edge_pred, tid);
-                
+    //                 quantize_point<CompMode, SkipOverwrite>(cur_ij_offset + last * offset, data[last * offset], edge_pred, tid);
+
 
     //         }
     //     }
     // }
 
-    
+
     // template <COMPMODE CompMode>
-    // ALWAYS_INLINE void interp_linear_and_quantize(const T * a, const T* b, size_t &len, T* data, 
+    // ALWAYS_INLINE void interp_linear_and_quantize(const T * a, const T* b, size_t &len, T* data,
     //     size_t& offset, size_t& cur_ij_offset, int tid) {
     //     size_t i = 0;
-        
+
     //     if constexpr (std::is_same_v<T, float>) {
     //         constexpr size_t step = AVX_256_parallelism;
     //         const __m256 factor = _mm256_set1_ps(0.5f);
@@ -1166,12 +1195,12 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //         for (; i  < len; i += step) {
     //             __m256 va = _mm256_loadu_ps(a + i);
     //             __m256 vb = _mm256_loadu_ps(b + i);
-                
-    //             __m256 sum = _mm256_add_ps(va, vb); 
-    //             sum = _mm256_mul_ps(sum, factor);        
-                
+
+    //             __m256 sum = _mm256_add_ps(va, vb);
+    //             sum = _mm256_mul_ps(sum, factor);
+
     //             // _mm256_storeu_ps(p + i, sum);
-    //             quantize_float<CompMode, step>(sum, i, data, offset, len, tid);
+    //             quantize_float<CompMode, step, false, SkipOverwrite>(sum, i, data, offset, len, tid);
     //         }
     //     }
     //     else if constexpr (std::is_same_v<T, double>) {
@@ -1182,18 +1211,18 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256d va = _mm256_loadu_pd(a + i);
     //             __m256d vb = _mm256_loadu_pd(b + i);
 
-    //             __m256d sum = _mm256_add_pd(va, vb);                       
-    //             sum = _mm256_mul_pd(sum, factor);    
+    //             __m256d sum = _mm256_add_pd(va, vb);
+    //             sum = _mm256_mul_pd(sum, factor);
     //             // _mm256_storeu_pd(p + i, sum);
     //             // size_t start = i;
-    //             quantize_double<CompMode, step>(sum, i, data, offset, len, tid);
+    //             quantize_double<CompMode, step, false, SkipOverwrite>(sum, i, data, offset, len, tid);
     //         }
     //     }
 
     // }
 
     // template <COMPMODE CompMode>
-    // ALWAYS_INLINE void interp_cubic_and_quantize(const T * a, const T* b, T* c, T*d, size_t &len, T* data, 
+    // ALWAYS_INLINE void interp_cubic_and_quantize(const T * a, const T* b, T* c, T*d, size_t &len, T* data,
     //     size_t& offset, size_t& cur_ij_offset, int tid) {
 
     //     size_t i = 0;
@@ -1209,16 +1238,16 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256 vc = _mm256_loadu_ps(c + i);
     //             __m256 vd = _mm256_loadu_ps(d + i);
 
-    //              __m256 sum = _mm256_add_ps(vb, vc); 
-    //              sum = _mm256_mul_ps(sum, nine); 
-    //              sum = _mm256_sub_ps(sum, va); 
-    //             sum = _mm256_sub_ps(sum, vd); 
-    //             sum = _mm256_mul_ps(sum, factor);        
+    //              __m256 sum = _mm256_add_ps(vb, vc);
+    //              sum = _mm256_mul_ps(sum, nine);
+    //              sum = _mm256_sub_ps(sum, va);
+    //             sum = _mm256_sub_ps(sum, vd);
+    //             sum = _mm256_mul_ps(sum, factor);
 
     //             // _mm256_storeu_ps(p + i, sum);
-    //             quantize_float<CompMode, step>(sum, i, data, offset, len, tid);
+    //             quantize_float<CompMode, step, false, SkipOverwrite>(sum, i, data, offset, len, tid);
     //         }
-            
+
     //     }
     //     else if constexpr (std::is_same_v<T, double>) {
     //         constexpr size_t step = AVX_256_parallelism;
@@ -1231,21 +1260,21 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256d vc = _mm256_loadu_pd(c + i);
     //             __m256d vd = _mm256_loadu_pd(d + i);
 
-    //             __m256d sum = _mm256_add_pd(vb, vc); 
-    //              sum = _mm256_mul_pd(sum, nine); 
-    //              sum = _mm256_sub_pd(sum, va); 
-    //             sum = _mm256_sub_pd(sum, vd); 
+    //             __m256d sum = _mm256_add_pd(vb, vc);
+    //              sum = _mm256_mul_pd(sum, nine);
+    //              sum = _mm256_sub_pd(sum, va);
+    //             sum = _mm256_sub_pd(sum, vd);
 
-    //             sum = _mm256_mul_pd(sum, factor);    
+    //             sum = _mm256_mul_pd(sum, factor);
     //             // _mm256_storeu_pd(p + i, sum);
-    //             quantize_double<CompMode, step>(sum, i, data, offset, len, tid);
+    //             quantize_double<CompMode, step, false, SkipOverwrite>(sum, i, data, offset, len, tid);
     //         }
     //     }
 
     // }
-    
+
     // template <COMPMODE CompMode>
-    // ALWAYS_INLINE void interp_equal_and_quantize(const T * a, size_t &len, T* data, 
+    // ALWAYS_INLINE void interp_equal_and_quantize(const T * a, size_t &len, T* data,
     //     size_t& offset, size_t& cur_ij_offset, int tid) {
 
     //     size_t i = 0;
@@ -1255,25 +1284,25 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //         for (; i  < len; i += step) {
     //             __m256 sum = _mm256_loadu_ps(a + i);
     //             // _mm256_storeu_ps(p + i, sum);
-    //             quantize_float<CompMode, step>(sum, i, data, offset, len, tid);
+    //             quantize_float<CompMode, step, false, SkipOverwrite>(sum, i, data, offset, len, tid);
     //         }
-            
+
     //     }
     //     else if constexpr (std::is_same_v<T, double>) {
     //         constexpr size_t step = AVX_256_parallelism;
     //         for (; i  < len; i += step) {
-    //             __m256d sum = _mm256_loadu_pd(a + i); 
-    //             quantize_double<CompMode, step>(sum, i, data, offset, len, tid);
+    //             __m256d sum = _mm256_loadu_pd(a + i);
+    //             quantize_double<CompMode, step, false, SkipOverwrite>(sum, i, data, offset, len, tid);
     //         }
     //     }
     // }
 
 
     // template <COMPMODE CompMode>
-    // ALWAYS_INLINE void interp_linear1_and_quantize(const T * a, const T* b, size_t &len, T* data, 
+    // ALWAYS_INLINE void interp_linear1_and_quantize(const T * a, const T* b, size_t &len, T* data,
     //     size_t& offset, size_t& cur_ij_offset, int tid) {
     //     size_t i = 0;
-        
+
     //     if constexpr (std::is_same_v<T, float>) {
     //         constexpr size_t step = AVX_256_parallelism;
     //         const __m256 factor = _mm256_set1_ps(0.5f);
@@ -1282,11 +1311,11 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256 vb = _mm256_loadu_ps(b + i);
     //             __m256 va = _mm256_loadu_ps(a + i);
     //             vb= _mm256_mul_ps(vb, three);
-    //             __m256 sum = _mm256_sub_ps(vb, va); 
-    //             sum = _mm256_mul_ps(sum, factor);        
-                
+    //             __m256 sum = _mm256_sub_ps(vb, va);
+    //             sum = _mm256_mul_ps(sum, factor);
+
     //             // _mm256_storeu_ps(p + i, sum);
-    //             quantize_float<CompMode, step>(sum, i, data, offset, len, tid);
+    //             quantize_float<CompMode, step, false, SkipOverwrite>(sum, i, data, offset, len, tid);
     //         }
     //     }
     //     else if constexpr (std::is_same_v<T, double>) {
@@ -1297,17 +1326,17 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256d va = _mm256_loadu_pd(a + i);
     //             __m256d vb = _mm256_loadu_pd(b + i);
     //             va = _mm256_mul_pd(va, three);
-    //             __m256d sum = _mm256_sub_pd(vb, va);                       
-    //             sum = _mm256_mul_pd(sum, factor);    
+    //             __m256d sum = _mm256_sub_pd(vb, va);
+    //             sum = _mm256_mul_pd(sum, factor);
     //             // _mm256_storeu_pd(p + i, sum);
     //             // size_t start = i;
-    //             quantize_double<CompMode, step>(sum, i, data, offset, len, tid);
+    //             quantize_double<CompMode, step, false, SkipOverwrite>(sum, i, data, offset, len, tid);
     //         }
     //     }
     // }
 
     // template <COMPMODE CompMode>
-    // ALWAYS_INLINE void interp_quad1_and_quantize(const T * a, const T* b, const T* c, size_t &len, T* data, 
+    // ALWAYS_INLINE void interp_quad1_and_quantize(const T * a, const T* b, const T* c, size_t &len, T* data,
     //     size_t& offset, size_t& cur_ij_offset, int tid) {
     //     size_t i = 0;
     //     if constexpr (std::is_same_v<T, float>) {
@@ -1322,11 +1351,11 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256 vb = _mm256_loadu_ps(b + i);
     //             __m256 vc = _mm256_loadu_ps(c + i);
     //             vb = _mm256_fmsub_ps(vb, six, vc);
-    //             __m256 sum = _mm256_add_ps(va, vb); 
-    //             sum = _mm256_mul_ps(sum, factor);        
-                
+    //             __m256 sum = _mm256_add_ps(va, vb);
+    //             sum = _mm256_mul_ps(sum, factor);
+
     //             // _mm256_storeu_ps(p + i, sum);
-    //             quantize_float<CompMode, step>(sum, i, data, offset, len, tid);
+    //             quantize_float<CompMode, step, false, SkipOverwrite>(sum, i, data, offset, len, tid);
     //         }
     //     }
     //     else if constexpr (std::is_same_v<T, double>) {
@@ -1341,18 +1370,18 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             va = _mm256_mul_pd(va, three);
     //             __m256d vc = _mm256_loadu_pd(c + i);
     //             vb = _mm256_fmsub_pd(vb, six, vc);
-    //             __m256d sum = _mm256_add_pd(va, vb); 
-    //             sum = _mm256_mul_pd(sum, factor);    
+    //             __m256d sum = _mm256_add_pd(va, vb);
+    //             sum = _mm256_mul_pd(sum, factor);
     //             // _mm256_storeu_pd(p + i, sum);
     //             // size_t start = i;
-    //             quantize_double<CompMode, step>(sum, i, data, offset, len, tid);
+    //             quantize_double<CompMode, step, false, SkipOverwrite>(sum, i, data, offset, len, tid);
     //         }
     //     }
-      
+
     // }
 
     // template <COMPMODE CompMode>
-    // ALWAYS_INLINE void interp_quad2_and_quantize(const T * a, const T* b, const T* c, size_t &len, T* data, 
+    // ALWAYS_INLINE void interp_quad2_and_quantize(const T * a, const T* b, const T* c, size_t &len, T* data,
     //     size_t& offset, size_t& cur_ij_offset, int tid) {
     //     size_t i = 0;
     //     if constexpr (std::is_same_v<T, float>) {
@@ -1366,13 +1395,13 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256 vc = _mm256_loadu_ps(c + i);
     //             vc = _mm256_mul_ps(vc, three);
     //             __m256 vb = _mm256_loadu_ps(b + i);
-                
+
     //             vb = _mm256_fmsub_ps(vb, six, va);
-    //             __m256 sum = _mm256_add_ps(vc, vb); 
-    //             sum = _mm256_mul_ps(sum, factor);        
-                
+    //             __m256 sum = _mm256_add_ps(vc, vb);
+    //             sum = _mm256_mul_ps(sum, factor);
+
     //             // _mm256_storeu_ps(p + i, sum);
-    //             quantize_float<CompMode, step>(sum, i, data, offset, len, tid);
+    //             quantize_float<CompMode, step, false, SkipOverwrite>(sum, i, data, offset, len, tid);
     //         }
     //     }
     //     else if constexpr (std::is_same_v<T, double>) {
@@ -1386,16 +1415,16 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256d va = _mm256_loadu_pd(a + i);
     //             vc = _mm256_mul_pd(vc, three);
     //             __m256d vb = _mm256_loadu_pd(b + i);
-                
+
     //             vb = _mm256_fmsub_pd(vb, six, va);
-    //             __m256d sum = _mm256_add_pd(vc, vb); 
-    //             sum = _mm256_mul_pd(sum, factor);     
+    //             __m256d sum = _mm256_add_pd(vc, vb);
+    //             sum = _mm256_mul_pd(sum, factor);
     //             // _mm256_storeu_pd(p + i, sum);
     //             // size_t start = i;
-    //             quantize_double<CompMode, step>(sum, i, data, offset, len, tid);
+    //             quantize_double<CompMode, step, false, SkipOverwrite>(sum, i, data, offset, len, tid);
     //         }
     //     }
-      
+
     // }
 
     // template <COMPMODE CompMode, int step, typename U = T, typename = std::enable_if_t<std::is_same_v<U, float>>>
@@ -1416,7 +1445,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //         // calculate quantization code
     //         __m256d quant_avx_low  = _mm256_cvtps_pd(_mm256_castps256_ps128(quant_avx));
     //         quant_avx_low  = _mm256_round_pd(_mm256_mul_pd(quant_avx_low,  ebx2_r_avx),  _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-            
+
     //         __m256d mask_low = _mm256_and_pd(
     //             _mm256_cmp_pd(quant_avx_low, nradius_avx, _CMP_GT_OQ),
     //             _mm256_cmp_pd(quant_avx_low, radius_avx, _CMP_LT_OQ)
@@ -1430,7 +1459,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             _mm256_cmp_pd(quant_avx_high, radius_avx, _CMP_LT_OQ)
     //         );
     //         quant_avx_high = _mm256_blendv_pd(zero_avx_d, quant_avx_high, mask_high);
-            
+
     //         // dequantization for decompression
     //         __m256d decompressed_low = _mm256_fmadd_pd(quant_avx_low, ebx2_avx,
     //                                 _mm256_cvtps_pd(_mm256_castps256_ps128(sum)));
@@ -1448,12 +1477,12 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //         quant_avx = _mm256_add_ps(quant_avx, radius_avx_f);
     //         float tmp[8];
     //         _mm256_storeu_ps(tmp, decompressed);
-            
+
     //         __m256 mask = _mm256_and_ps(
     //                 _mm256_cmp_ps(err_dequan, nrel_eb_avx_f, _CMP_GE_OQ),
     //                 _mm256_cmp_ps(err_dequan, rel_eb_avx_f, _CMP_LE_OQ)
     //         );
-            
+
     //         quant_avx = _mm256_blendv_ps(zero_avx_f, quant_avx, mask);
     //         // float verify[8];
     //         // _mm256_storeu_ps(verify, quant_avx);
@@ -1463,11 +1492,11 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //         size_t j = 0;
     //         #pragma unroll
     //         for ( ; j < step && start + j < len; ++j) {
-    //             if (quant_vals[j] != 0) 
+    //             if (quant_vals[j] != 0)
     //                 data[(start + j) * offset] = tmp[j];
     //             else
     //                 quantizer.save_unpred2(ori[j], tid);
-    //            
+    //
     //         }
 
     //         _mm256_storeu_si256(
@@ -1482,10 +1511,10 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //         int quant_vals[8];
     //         _mm256_storeu_si256(reinterpret_cast<__m256i*>(quant_vals), quant_avx_i);
     //         quant_avx_i = _mm256_sub_epi32(quant_avx_i, radius_avx_256i);
-            
+
     //         __m256d decompressed_low  = _mm256_cvtepi32_pd(_mm256_castsi256_si128(quant_avx_i));
     //         decompressed_low = _mm256_mul_pd(decompressed_low, ebx2_avx);
-            
+
     //         __m256d decompressed_high = _mm256_cvtepi32_pd(_mm256_extracti128_si256(quant_avx_i, 1));
     //         decompressed_high = _mm256_mul_pd(decompressed_high, ebx2_avx);
 
@@ -1495,19 +1524,19 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //         decompressed = _mm256_add_ps(decompressed, sum);
     //         float tmp[8];
     //         _mm256_storeu_ps(tmp, decompressed);
-            
+
     //         size_t j = 0;
     //         #pragma unroll
     //         for ( ; j < step && start + j < len; ++j) {
-    //             if (quant_vals[j] != 0) 
+    //             if (quant_vals[j] != 0)
     //                 data[(start + j) * offset] = tmp[j];
-    //             else 
+    //             else
     //                 data[(start + j) * offset] = quantizer.recover_unpred2(tid);
     //         }
     //         local_quant_index[tid].value += j;
     //     }
     // }
-    
+
     // template <COMPMODE CompMode, int step, typename U = T, typename = std::enable_if_t<std::is_same_v<U, double>>>
     // ALWAYS_INLINE void quantize_double (__m256d sum, size_t& start, T*& data, size_t& offset, size_t& len, int tid) {
     //     if constexpr (CompMode == COMPMODE::COMP) {
@@ -1520,7 +1549,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //         __m256d ori_avx = _mm256_loadu_pd(ori);
     //         __m256d quant_avx = _mm256_sub_pd(ori_avx, sum); // prediction error
     //         quant_avx = _mm256_round_pd(_mm256_mul_pd(quant_avx,  ebx2_r_avx),  _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-            
+
     //         __m256d mask = _mm256_and_pd(
     //             _mm256_cmp_pd(quant_avx, nradius_avx, _CMP_GT_OQ),
     //             _mm256_cmp_pd(quant_avx, radius_avx, _CMP_LT_OQ)
@@ -1541,14 +1570,14 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
 
     //         int quant_vals[4];
     //         __m128i quant_avx_i = _mm256_cvtpd_epi32(quant_avx);
-            
+
     //         _mm_storeu_si128(reinterpret_cast<__m128i*>(quant_vals), quant_avx_i);
     //         size_t j = 0;
     //         #pragma unroll
     //         for ( ; j < step && start + j < len; ++j) {
     //             if (quant_vals[j] != 0)
     //                 data[(start + j) * offset] = tmp[j];
-    //             else 
+    //             else
     //                 quantizer.save_unpred2(ori[j], tid);
     //         }
     //         _mm_storeu_si128(
@@ -1564,90 +1593,90 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //         _mm_storeu_si128(reinterpret_cast<__m128i*>(quant_vals), quant_avx_i);
     //         quant_avx_i = _mm_sub_epi32(quant_avx_i, radius_avx_128i);
 
-    //         __m256d decompressed = _mm256_fmadd_pd(_mm256_cvtepi32_pd(quant_avx_i), 
+    //         __m256d decompressed = _mm256_fmadd_pd(_mm256_cvtepi32_pd(quant_avx_i),
     //                                 ebx2_avx, sum);
     //         T tmp[4];
     //         _mm256_storeu_pd(tmp, decompressed);
-            
+
     //         size_t j = 0;
     //         #pragma unroll
     //         for ( ; j < step && start + j < len; ++j) {
-    //             if (quant_vals[j] != 0) 
+    //             if (quant_vals[j] != 0)
     //                 data[(start + j) * offset] = tmp[j];
     //             else
     //                 data[(start + j) * offset] = quantizer.recover_unpred2(tid);
     //         }
-    //         local_quant_index[tid].value += j;  
+    //         local_quant_index[tid].value += j;
     //     }
     // }
 
-    template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void interp_linear_and_quantize_1D(const T * buf, const size_t &len, T* data, 
+    template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
+    ALWAYS_INLINE void interp_linear_and_quantize_1D(const T * buf, const size_t &len, T* data,
         size_t&  offset, size_t& cur_ij_offset, int& tid, QuantizeFunc &&quantize_func);
 
-    template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void interp_cubic_and_quantize_1D(const T * buf, const size_t &len, T* data, 
+    template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
+    ALWAYS_INLINE void interp_cubic_and_quantize_1D(const T * buf, const size_t &len, T* data,
         size_t&  offset, size_t& cur_ij_offset, int& tid, QuantizeFunc &&quantize_func);
 
-    template <COMPMODE CompMode, bool EnableInnerOmp = false, class QuantizeFunc>
+    template <COMPMODE CompMode, bool EnableInnerOmp = false, bool SkipOverwrite = false, class QuantizeFunc>
     ALWAYS_INLINE void interp_linear_and_quantize_1D_line(T *data, const size_t &len,
         size_t& offset, size_t& cur_ij_offset, int& tid, QuantizeFunc &&quantize_func);
 
-    template <COMPMODE CompMode, bool EnableInnerOmp = false, class QuantizeFunc>
+    template <COMPMODE CompMode, bool EnableInnerOmp = false, bool SkipOverwrite = false, class QuantizeFunc>
     ALWAYS_INLINE void interp_cubic_and_quantize_1D_line(T *data, const size_t &len,
         size_t& offset, size_t& cur_ij_offset, int& tid, QuantizeFunc &&quantize_func);
 
-    template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void interp_linear_and_quantize(const T * a, const T* b, size_t &len, T* data, 
+    template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
+    ALWAYS_INLINE void interp_linear_and_quantize(const T * a, const T* b, size_t &len, T* data,
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func);
 
-    template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void interp_cubic_and_quantize(const T * a, const T* b, T* c, T*d, size_t &len, T* data, 
+    template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
+    ALWAYS_INLINE void interp_cubic_and_quantize(const T * a, const T* b, T* c, T*d, size_t &len, T* data,
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func);
 
-    template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void interp_equal_and_quantize(const T * a, size_t &len, T* data, 
+    template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
+    ALWAYS_INLINE void interp_equal_and_quantize(const T * a, size_t &len, T* data,
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func);
 
-    template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void interp_linear1_and_quantize(const T * a, const T* b, size_t &len, T* data, 
+    template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
+    ALWAYS_INLINE void interp_linear1_and_quantize(const T * a, const T* b, size_t &len, T* data,
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func);
 
-    template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void interp_quad1_and_quantize(const T * a, const T* b, const T* c, size_t &len, T* data, 
+    template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
+    ALWAYS_INLINE void interp_quad1_and_quantize(const T * a, const T* b, const T* c, size_t &len, T* data,
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func);
 
-    template <COMPMODE CompMode, class QuantizeFunc>
-    ALWAYS_INLINE void interp_quad2_and_quantize(const T * a, const T* b, const T* c, size_t &len, T* data, 
+    template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
+    ALWAYS_INLINE void interp_quad2_and_quantize(const T * a, const T* b, const T* c, size_t &len, T* data,
         size_t& offset, size_t& cur_ij_offset, int tid, QuantizeFunc &&quantize_func);
 
 #ifdef __AVX2__
     template<typename U = T, typename = std::enable_if_t<std::is_same_v<U, float>>>
     ALWAYS_INLINE void quantize_1D_float (__m256& sum, __m256& ori_avx, __m256& quant_avx, T tmp[8]);
-    
+
     template<typename U = T, typename = std::enable_if_t<std::is_same_v<U, double>>>
     ALWAYS_INLINE void quantize_1D_double (__m256d& sum, __m256d& ori_avx, __m256d& quant_avx, T tmp[4]);
 
-    template <COMPMODE CompMode, int step, bool FullOnly = false, typename U = T, typename = std::enable_if_t<std::is_same_v<U, float>>>
+    template <COMPMODE CompMode, int step, bool FullOnly = false, bool SkipOverwrite = false, typename U = T, typename = std::enable_if_t<std::is_same_v<U, float>>>
     ALWAYS_INLINE void quantize_float (__m256& sum, size_t& start, T*& data, size_t& offset, size_t& len, int tid);
 
-    template <COMPMODE CompMode, int step, bool FullOnly = false, typename U = T, typename = std::enable_if_t<std::is_same_v<U, double>>>
+    template <COMPMODE CompMode, int step, bool FullOnly = false, bool SkipOverwrite = false, typename U = T, typename = std::enable_if_t<std::is_same_v<U, double>>>
     ALWAYS_INLINE void quantize_double (__m256d& sum, size_t& start, T*& data, size_t& offset, size_t& len, int tid);
 #endif
 #ifdef __ARM_FEATURE_SVE2
     template<typename U = T, typename = std::enable_if_t<std::is_same_v<U, float>>>
-    ALWAYS_INLINE void quantize_1D_float (svfloat32_t& sum, svfloat32_t& ori_sve, svfloat32_t& quant_sve, T* tmp, 
+    ALWAYS_INLINE void quantize_1D_float (svfloat32_t& sum, svfloat32_t& ori_sve, svfloat32_t& quant_sve, T* tmp,
         svbool_t& pg, svbool_t& pg64);
-    
+
     template<typename U = T, typename = std::enable_if_t<std::is_same_v<U, double>>>
-    ALWAYS_INLINE void quantize_1D_double (svfloat64_t& sum, svfloat64_t& ori_sve, svfloat64_t& quant_sve, T* tmp, 
+    ALWAYS_INLINE void quantize_1D_double (svfloat64_t& sum, svfloat64_t& ori_sve, svfloat64_t& quant_sve, T* tmp,
         svbool_t& pg64);
-    template <COMPMODE CompMode, bool FullOnly = false, typename U = T, typename = std::enable_if_t<std::is_same_v<U, float>>>
-    ALWAYS_INLINE void quantize_float (svfloat32_t& sum, size_t& start, T*& data, size_t& offset, size_t& len, 
+    template <COMPMODE CompMode, bool FullOnly = false, bool SkipOverwrite = false, typename U = T, typename = std::enable_if_t<std::is_same_v<U, float>>>
+    ALWAYS_INLINE void quantize_float (svfloat32_t& sum, size_t& start, T*& data, size_t& offset, size_t& len,
         const size_t& step, svbool_t& pg, svbool_t& pg64, int tid);
 
-    template <COMPMODE CompMode, bool FullOnly = false, typename U = T, typename = std::enable_if_t<std::is_same_v<U, double>>>
-    ALWAYS_INLINE void quantize_double (svfloat64_t& sum, size_t& start, T*& data, size_t& offset, size_t& len, 
+    template <COMPMODE CompMode, bool FullOnly = false, bool SkipOverwrite = false, typename U = T, typename = std::enable_if_t<std::is_same_v<U, double>>>
+    ALWAYS_INLINE void quantize_double (svfloat64_t& sum, size_t& start, T*& data, size_t& offset, size_t& len,
         const size_t& step, svbool_t& pg64, int tid);
 
 #endif
@@ -1669,14 +1698,14 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256 vc = _mm256_loadu_ps(c + i);
     //             __m256 vd = _mm256_loadu_ps(d + i);
 
-    //              __m256 sum = _mm256_add_ps(vb, vc); 
-    //              sum = _mm256_mul_ps(sum, nine); 
-    //              sum = _mm256_sub_ps(sum, va); 
-    //             sum = _mm256_sub_ps(sum, vd); 
+    //              __m256 sum = _mm256_add_ps(vb, vc);
+    //              sum = _mm256_mul_ps(sum, nine);
+    //              sum = _mm256_sub_ps(sum, va);
+    //             sum = _mm256_sub_ps(sum, vd);
 
-               
-                      
-    //             sum = _mm256_mul_ps(sum, factor);        
+
+
+    //             sum = _mm256_mul_ps(sum, factor);
 
     //             _mm256_storeu_ps(p + i, sum);
     //         }
@@ -1692,14 +1721,14 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256d vc = _mm256_loadu_pd(c + i);
     //             __m256d vd = _mm256_loadu_pd(d + i);
 
-    //             __m256d sum = _mm256_add_pd(vb, vc); 
-    //              sum = _mm256_mul_pd(sum, nine); 
-    //              sum = _mm256_sub_pd(sum, va); 
-    //             sum = _mm256_sub_pd(sum, vd); 
+    //             __m256d sum = _mm256_add_pd(vb, vc);
+    //              sum = _mm256_mul_pd(sum, nine);
+    //              sum = _mm256_sub_pd(sum, va);
+    //             sum = _mm256_sub_pd(sum, vd);
 
-               
-                      
-    //             sum = _mm256_mul_pd(sum, factor);    
+
+
+    //             sum = _mm256_mul_pd(sum, factor);
     //             _mm256_storeu_pd(p + i, sum);
     //         }
     //     }
@@ -1722,10 +1751,10 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //         for (; i  < len; i += step) {
     //             __m256 va = _mm256_loadu_ps(a + i);
     //             __m256 vb = _mm256_loadu_ps(b + i);
-                
-    //             __m256 sum = _mm256_add_ps(va, vb); 
-    //             sum = _mm256_mul_ps(sum, factor);        
-                
+
+    //             __m256 sum = _mm256_add_ps(va, vb);
+    //             sum = _mm256_mul_ps(sum, factor);
+
     //             _mm256_storeu_ps(p + i, sum);
     //         }
     //     }
@@ -1738,9 +1767,9 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256d va = _mm256_loadu_pd(a + i);
     //             __m256d vb = _mm256_loadu_pd(b + i);
 
-    //             __m256d sum = _mm256_add_pd(va, vb); 
-                      
-    //             sum = _mm256_mul_pd(sum, factor);    
+    //             __m256d sum = _mm256_add_pd(va, vb);
+
+    //             sum = _mm256_mul_pd(sum, factor);
     //             _mm256_storeu_pd(p + i, sum);
     //         }
     //     }
@@ -1769,8 +1798,8 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256 vb = _mm256_loadu_ps(buf + i + 1);
 
 
-    //              __m256 sum = _mm256_add_ps(va, vb);                        
-    //             sum = _mm256_mul_ps(sum, factor);        
+    //              __m256 sum = _mm256_add_ps(va, vb);
+    //             sum = _mm256_mul_ps(sum, factor);
 
     //             _mm256_storeu_ps(p + i, sum);
     //         }
@@ -1783,8 +1812,8 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256d va = _mm256_loadu_pd(buf + i);
     //             __m256d vb = _mm256_loadu_pd(buf + i + 1);
 
-    //             __m256d sum = _mm256_add_pd(va, vb);   
-    //             sum = _mm256_mul_pd(sum, factor);    
+    //             __m256d sum = _mm256_add_pd(va, vb);
+    //             sum = _mm256_mul_pd(sum, factor);
     //             _mm256_storeu_pd(p + i, sum);
     //         }
     //     }
@@ -1814,7 +1843,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //     else {
     //         p[0] = interp_quad_1(buf[0], buf[1], buf[2]) ;
     //     }
-           
+
     //     size_t i = 0;
 
     //     if constexpr (is_float) {
@@ -1828,11 +1857,11 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256 vc = _mm256_loadu_ps(buf + i + 2);
     //             __m256 vd = _mm256_loadu_ps(buf + i + 3);
 
-    //              __m256 sum = _mm256_add_ps(vb, vc); 
-    //              sum = _mm256_mul_ps(sum, nine); 
-    //              sum = _mm256_sub_ps(sum, va); 
-    //             sum = _mm256_sub_ps(sum, vd);                       
-    //             sum = _mm256_mul_ps(sum, factor);        
+    //              __m256 sum = _mm256_add_ps(vb, vc);
+    //              sum = _mm256_mul_ps(sum, nine);
+    //              sum = _mm256_sub_ps(sum, va);
+    //             sum = _mm256_sub_ps(sum, vd);
+    //             sum = _mm256_mul_ps(sum, factor);
 
     //             _mm256_storeu_ps(p + i + 1, sum);
     //         }
@@ -1848,16 +1877,16 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             __m256d vc = _mm256_loadu_pd(buf + i + 2);
     //             __m256d vd = _mm256_loadu_pd(buf + i + 3);
 
-    //             __m256d sum = _mm256_add_pd(vb, vc); 
-    //              sum = _mm256_mul_pd(sum, nine); 
-    //              sum = _mm256_sub_pd(sum, va); 
-    //             sum = _mm256_sub_pd(sum, vd); 
-    //             sum = _mm256_mul_pd(sum, factor);    
+    //             __m256d sum = _mm256_add_pd(vb, vc);
+    //              sum = _mm256_mul_pd(sum, nine);
+    //              sum = _mm256_sub_pd(sum, va);
+    //             sum = _mm256_sub_pd(sum, vd);
+    //             sum = _mm256_mul_pd(sum, factor);
     //             _mm256_storeu_pd(p + i + 1, sum);
     //         }
     //     }
     //     if(odd_len > 1){
-    //         if(odd_len < even_len){//the only boundary is p[len- 1] 
+    //         if(odd_len < even_len){//the only boundary is p[len- 1]
     //             //odd_len < even_len so even_len > 2
     //             p[odd_len - 1] = interp_quad_2(buf[even_len - 3], buf[even_len - 2], buf[even_len - 1]);
 
@@ -1870,7 +1899,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //             //len -1
     //             //odd_len = even_len so even_len > 1
     //                 p[odd_len - 1] = interp_linear1(buf[even_len - 2], buf[even_len - 1]);
-                
+
 
     //         }
     //     }
@@ -1880,7 +1909,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
     //     }*/
     // }
 
-    template <COMPMODE CompMode, class QuantizeFunc>
+    template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
     double interpolation_1d_simd_2d_y(T *data, const std::array<size_t, N> &begin_idx,
                                               const std::array<size_t, N> &end_idx, const size_t &direction,
                                               std::array<size_t, N> &strides, const size_t &math_stride,
@@ -1942,10 +1971,10 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                 auto buffer_offset = buffer_len * tid;
                 auto cur_buffer_1 = interp_buffer_1 + buffer_offset;
                 auto cur_buffer_2 = interp_buffer_2 + buffer_offset;
-                 
+
                 if (start_idx < ends[0])
-                {    
-                    auto cur_ij_offset = offset + start_idx * dim_offsets[0];   
+                {
+                    auto cur_ij_offset = offset + start_idx * dim_offsets[0];
                     size_t buffer_idx = 0;
                     for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
                             auto cur_offset =  cur_ij_offset + k;
@@ -1953,9 +1982,9 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                             cur_buffer_2[buffer_idx] = data[cur_offset + stride];
                             ++buffer_idx;
                     }
-                    interp_linear_and_quantize<CompMode>(cur_buffer_1,cur_buffer_2, vector_len, 
+                    interp_linear_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1,cur_buffer_2, vector_len,
                     data + cur_ij_offset, strides[1], cur_ij_offset, tid, quantize_func);
-                    for(size_t i = start_idx + strides[0]; i < end_idx; i += strides[0]) {    
+                    for(size_t i = start_idx + strides[0]; i < end_idx; i += strides[0]) {
                         auto cur_ij_offset = offset + i * dim_offsets[0];
                         size_t buffer_idx = 0;
                         auto temp_buffer = cur_buffer_1;
@@ -1965,7 +1994,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                             auto cur_offset =  cur_ij_offset + stride + k;
                             cur_buffer_2[buffer_idx++] = data[cur_offset];
                         }
-                        interp_linear_and_quantize<CompMode>(cur_buffer_1,cur_buffer_2, vector_len, 
+                        interp_linear_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1,cur_buffer_2, vector_len,
                         data + cur_ij_offset, strides[1], cur_ij_offset, tid, quantize_func);
                     }
                 }
@@ -2001,11 +2030,11 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
             //     //     }
 
             //     // }
-                
-            //     interp_linear_and_quantize<CompMode>(cur_buffer_1,cur_buffer_2, vector_len, 
+
+            //     interp_linear_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1,cur_buffer_2, vector_len,
             //         data + cur_ij_offset, strides[1], cur_ij_offset, tid);
-            // } 
-                
+            // }
+
             if (n % 2 == 0) {
                 auto cur_ij_offset = offset + (n - 1) * dim_offsets[0];
 
@@ -2017,10 +2046,10 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                         cur_buffer_2[buffer_idx] = data[cur_offset - stride];  // fix: was cur_ij_offset-stride+2k (double k), read OOB
                         ++buffer_idx;
                     }
-                    interp_equal_and_quantize<CompMode>(cur_buffer_2, vector_len, 
+                    interp_equal_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, vector_len,
                     data + cur_ij_offset, strides[1], cur_ij_offset, 0, quantize_func);
                 }
-                    
+
                 else {
                     size_t buffer_idx = 0;
                     auto cur_buffer_1 = interp_buffer_1;
@@ -2031,10 +2060,10 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                         cur_buffer_2[buffer_idx] = data[cur_offset - stride];
                         ++buffer_idx;
                     }
-                    interp_linear1_and_quantize<CompMode>(cur_buffer_1, cur_buffer_2, vector_len, 
+                    interp_linear1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, vector_len,
                     data + cur_ij_offset, strides[1], cur_ij_offset, 0, quantize_func);
                 }
-            }  
+            }
         } else {
             size_t stride3x = 3 * stride;
             size_t i_start = 3;
@@ -2048,7 +2077,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
             auto cur_buffer_1 = interp_buffer_1;
             auto cur_buffer_2 = interp_buffer_2;
             auto cur_buffer_3 = interp_buffer_3;
-            auto cur_buffer_4 = interp_buffer_4; 
+            auto cur_buffer_4 = interp_buffer_4;
 
             if (n >= 5) {
                 auto cur_ij_offset = offset + dim_offsets[0];
@@ -2059,7 +2088,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                     cur_buffer_3[i] = data[cur_offset + stride];
                     cur_buffer_4[i] = data[cur_offset + stride3x];
                 }
-                interp_quad1_and_quantize<CompMode>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                interp_quad1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
                     data + cur_ij_offset, strides[1], cur_ij_offset, 0, quantize_func);
             }
             else if (n >= 3) {
@@ -2070,7 +2099,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                     cur_buffer_2[i] = data[cur_offset - stride];
                     cur_buffer_3[i] = data[cur_offset + stride];
                 }
-                interp_linear_and_quantize<CompMode>(cur_buffer_2, cur_buffer_3, vector_len,
+                interp_linear_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, vector_len,
                     data + cur_ij_offset, strides[1], cur_ij_offset, 0, quantize_func);
             }
             else if (n >= 1) {
@@ -2080,7 +2109,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                     auto cur_offset =  cur_ij_offset + begins[1] + i * strides[1];
                     cur_buffer_2[i] = data[cur_offset - stride];
                 }
-                interp_equal_and_quantize<CompMode>(cur_buffer_2, vector_len,
+                interp_equal_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, vector_len,
                     data + cur_ij_offset, strides[1], cur_ij_offset, 0, quantize_func);
             }
             size_t nthreads = omp_get_max_threads();
@@ -2115,11 +2144,11 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                 auto cur_buffer_1 = interp_buffer_1 + buffer_offset;
                 auto cur_buffer_2 = interp_buffer_2 + buffer_offset;
                 auto cur_buffer_3 = interp_buffer_3 + buffer_offset;
-                auto cur_buffer_4 = interp_buffer_4 + buffer_offset; 
-                 
+                auto cur_buffer_4 = interp_buffer_4 + buffer_offset;
+
                 if (start_idx < ends[0])
-                {    
-                    auto cur_ij_offset = offset + start_idx * dim_offsets[0];   
+                {
+                    auto cur_ij_offset = offset + start_idx * dim_offsets[0];
                     size_t buffer_idx = 0;
                     for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
                         auto cur_offset =  cur_ij_offset + k;
@@ -2134,10 +2163,10 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                         ++buffer_idx;
 
                     }
-                    interp_cubic_and_quantize<CompMode>(cur_buffer_1,cur_buffer_2,cur_buffer_3,cur_buffer_4, vector_len, 
+                    interp_cubic_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1,cur_buffer_2,cur_buffer_3,cur_buffer_4, vector_len,
                         data + cur_ij_offset, strides[1], cur_ij_offset, tid, quantize_func);
-                    for(size_t i = start_idx + strides[0]; i < end_idx; i += strides[0]) {   
-                        auto cur_ij_offset = offset + i * dim_offsets[0];   
+                    for(size_t i = start_idx + strides[0]; i < end_idx; i += strides[0]) {
+                        auto cur_ij_offset = offset + i * dim_offsets[0];
                         auto temp_buffer = cur_buffer_1;
                         cur_buffer_1 = cur_buffer_2;
                         cur_buffer_2 = cur_buffer_3;
@@ -2149,7 +2178,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                             auto cur_offset =  cur_ij_offset + stride3x + k;
                             cur_buffer_4[buffer_idx++] = data[cur_offset];
                         }
-                        interp_cubic_and_quantize<CompMode>(cur_buffer_1,cur_buffer_2,cur_buffer_3,cur_buffer_4, vector_len, 
+                        interp_cubic_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1,cur_buffer_2,cur_buffer_3,cur_buffer_4, vector_len,
                         data + cur_ij_offset, strides[1], cur_ij_offset, tid, quantize_func);
                     }
                 }
@@ -2163,7 +2192,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
             //     auto cur_buffer_1 = interp_buffer_1 + buffer_offset;
             //     auto cur_buffer_2 = interp_buffer_2 + buffer_offset;
             //     auto cur_buffer_3 = interp_buffer_3 + buffer_offset;
-            //     auto cur_buffer_4 = interp_buffer_4 + buffer_offset; 
+            //     auto cur_buffer_4 = interp_buffer_4 + buffer_offset;
             //     // for(size_t i = begins[0]; i < ends[0]; i += strides[0]){
             //     auto cur_ij_offset = offset + i * dim_offsets[0];
             //     size_t buffer_idx = 0;
@@ -2180,10 +2209,10 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
             //         ++buffer_idx;
 
             //     }
-            //         interp_cubic_and_quantize<CompMode>(cur_buffer_1,cur_buffer_2,cur_buffer_3,cur_buffer_4, vector_len, 
+            //         interp_cubic_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1,cur_buffer_2,cur_buffer_3,cur_buffer_4, vector_len,
             //             data + cur_ij_offset, strides[1], cur_ij_offset, tid);
-                    
-                
+
+
             // }
             if (n % 2 == 1) {
                 if (n > 3) {
@@ -2202,7 +2231,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                         ++buffer_idx;
 
                     }
-                    interp_quad2_and_quantize<CompMode>(cur_buffer_1, cur_buffer_2, cur_buffer_3, vector_len, 
+                    interp_quad2_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, cur_buffer_3, vector_len,
                         data + cur_ij_offset, strides[1], cur_ij_offset, 0, quantize_func);
 
                 }
@@ -2220,7 +2249,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                         // cur_buffer_4[buffer_idx] = data[cur_offset +  stride3x];
                         ++buffer_idx;
                     }
-                    interp_quad2_and_quantize<CompMode>(cur_buffer_1, cur_buffer_2, cur_buffer_3, vector_len, 
+                    interp_quad2_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, cur_buffer_3, vector_len,
                         data + cur_ij_offset, strides[1], cur_ij_offset, 0, quantize_func);
                 }
                 if (n > 2) {
@@ -2235,8 +2264,8 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                         // cur_buffer_4[buffer_idx] = data[cur_offset +  stride3x];
                         ++buffer_idx;
                     }
-                    
-                    interp_linear1_and_quantize<CompMode>(cur_buffer_1, cur_buffer_2, vector_len, 
+
+                    interp_linear1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, vector_len,
                         data + cur_ij_offset, strides[1], cur_ij_offset, 0, quantize_func);
                 }
             }
@@ -2266,15 +2295,15 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         //                         quantize_func(d - data, *d,
         //                                       interp_quad_2(*(d - stride3x), *(d - stride), *(d + stride)), tid);
         //                     else
-        //                         quantize_func(d - data, *d, interp_linear1(*(d - stride3x), *(d - stride)), tid);
+        //                         quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear1(*(d - stride3x), *(d - stride)), tid);
         //                 } else {
         //                     if (boundary + 3 < n)
         //                         quantize_func(d - data, *d,
         //                                       interp_quad_1(*(d - stride), *(d + stride), *(d + stride3x)), tid);
         //                     else if (boundary + 1 < n)
-        //                         quantize_func(d - data, *d, interp_linear(*(d - stride), *(d + stride)), tid);
+        //                         quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear(*(d - stride), *(d + stride)), tid);
         //                     else
-        //                         quantize_func(d - data, *d, *(d - stride), tid);
+        //                         quantize_point<CompMode, SkipOverwrite>(d - data, *d, *(d - stride), tid);
         //                 }
         //             });
         //     }
@@ -2282,7 +2311,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         return predict_error;
     }
 
-template <COMPMODE CompMode, class QuantizeFunc>
+template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
     double interpolation_1d_simd_2d_x(T *data, const std::array<size_t, N> &begin_idx,
                                               const std::array<size_t, N> &end_idx, const size_t &direction,
                                               std::array<size_t, N> &strides, const size_t &math_stride,
@@ -2318,7 +2347,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
             for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
                 auto tid = omp_get_thread_num();
                 auto cur_ij_offset = offset + i * dim_offsets[0];
-                interp_linear_and_quantize_1D_line<CompMode>(
+                interp_linear_and_quantize_1D_line<CompMode, false, SkipOverwrite>(
                     data, n, dim_offsets[direction], cur_ij_offset, tid, quantize_func);
 
             }
@@ -2333,14 +2362,14 @@ template <COMPMODE CompMode, class QuantizeFunc>
             for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
                 auto tid = omp_get_thread_num();
                 auto cur_ij_offset = offset + i * dim_offsets[0];
-                interp_cubic_and_quantize_1D_line<CompMode>(
+                interp_cubic_and_quantize_1D_line<CompMode, false, SkipOverwrite>(
                     data, n, dim_offsets[direction], cur_ij_offset, tid, quantize_func);
             }
         }
         return predict_error;
     }
 
-    template <COMPMODE CompMode, class QuantizeFunc>
+    template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
     double interpolation_1d_simd_3d_z(T *data, const std::array<size_t, N> &begin_idx,
                                               const std::array<size_t, N> &end_idx, const size_t &direction,
                                               std::array<size_t, N> &strides, const size_t &math_stride,
@@ -2372,16 +2401,16 @@ template <COMPMODE CompMode, class QuantizeFunc>
             // strides[direction] = 2;
             // foreach_omp2
             //     <T, N>(data, offset, begins, ends, strides, dim_offsets,
-            //            [&](T *d, int tid) { quantize_func(d - data, *d, interp_linear(*(d - stride), *(d + stride)), tid); });
+            //            [&](T *d, int tid) { quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear(*(d - stride), *(d + stride)), tid); });
             // if (n % 2 == 0) {
             //     begins[direction] = n - 1;
             //     ends[direction] = n;
             //     foreach_omp2 //todo: this is infficient when direction = 0
             //         <T, N>(data, offset, begins, ends, strides, dim_offsets, [&](T *d, int tid) {
             //             if (n < 3)
-            //                 quantize_func(d - data, *d, *(d - stride), tid);
+            //                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, *(d - stride), tid);
             //             else
-            //                 quantize_func(d - data, *d, interp_linear1(*(d - stride2x), *(d - stride)), tid);
+            //                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear1(*(d - stride2x), *(d - stride)), tid);
             //         });
             // }
             begins[direction] = 1;
@@ -2421,7 +2450,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                             auto cur_offset =  cur_ij_offset + stride + k;
                         // if (visited[cur_offset]==0 )
                             //   std::cout<<"e2 "<<i<<" "<<j<<" "<<k<<" "<<cur_offset<<std::endl;
-                        
+
                         cur_buffer_2[buffer_idx++] = data[cur_offset];
 
                             //cur_buffer_4[buffer_idx++] = data[0];
@@ -2429,9 +2458,9 @@ template <COMPMODE CompMode, class QuantizeFunc>
                         }
 
                     }
-                    interp_linear_and_quantize<CompMode>(cur_buffer_1,cur_buffer_2, vector_len, 
+                    interp_linear_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1,cur_buffer_2, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
-                    
+
                 }
                 if (n % 2 == 0) {
                     auto cur_ij_offset = offset + (n - 1) * dim_offsets[0] + j * dim_offsets[1];
@@ -2444,7 +2473,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                         for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
                             cur_buffer_2[buffer_idx++] = data[cur_ij_offset - stride + k];
                         }
-                        interp_equal_and_quantize<CompMode>(cur_buffer_2, vector_len,
+                        interp_equal_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
                     }
                     else {
@@ -2453,7 +2482,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                             auto cur_offset =  cur_ij_offset - stride2x + k;
                            cur_buffer_1[buffer_idx++] = data[cur_offset];
                         }
-                        interp_linear1_and_quantize<CompMode>(cur_buffer_1, cur_buffer_2, vector_len, 
+                        interp_linear1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
                     }
                 }
@@ -2464,9 +2493,9 @@ template <COMPMODE CompMode, class QuantizeFunc>
             //     foreach_omp2 //todo: this is infficient when direction = 0
             //         <T, N>(data, offset, begins, ends, strides, dim_offsets, [&](T *d, int tid) {
             //             if (n < 3)
-            //                 quantize_func(d - data, *d, *(d - stride), tid);
+            //                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, *(d - stride), tid);
             //             else
-            //                 quantize_func(d - data, *d, interp_linear1(*(d - stride2x), *(d - stride)), tid);
+            //                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear1(*(d - stride2x), *(d - stride)), tid);
             //         });
             // }
         } else {
@@ -2484,7 +2513,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                 auto cur_buffer_1 = interp_buffer_1 + buffer_offset;
                 auto cur_buffer_2 = interp_buffer_2 + buffer_offset;
                 auto cur_buffer_3 = interp_buffer_3 + buffer_offset;
-                auto cur_buffer_4 = interp_buffer_4 + buffer_offset; 
+                auto cur_buffer_4 = interp_buffer_4 + buffer_offset;
 
                 // auto cur_ij_offset = offset + dim_offsets[0] + j * dim_offsets[1];
                 // for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
@@ -2505,7 +2534,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                         cur_buffer_4[buffer_idx] = data[cur_offset + stride3x];
                         ++buffer_idx;
                     }
-                    interp_quad1_and_quantize<CompMode>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len, 
+                    interp_quad1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
                 }
                 else if (n >= 3) {
@@ -2517,7 +2546,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                         cur_buffer_3[buffer_idx] = data[cur_offset + stride];
                         ++buffer_idx;
                     }
-                    interp_linear_and_quantize<CompMode>(cur_buffer_2, cur_buffer_3, vector_len, 
+                    interp_linear_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
                 }
                 else if (n >= 1) {
@@ -2528,7 +2557,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                         cur_buffer_2[buffer_idx] = data[cur_offset - stride];
                         ++buffer_idx;
                     }
-                    interp_equal_and_quantize<CompMode>(cur_buffer_2, vector_len, 
+                    interp_equal_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
                 }
                 for(size_t i = begins[0]; i < ends[0]; i += strides[0]){
@@ -2549,7 +2578,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
 
                     //     }
                     // }
-                    
+
                     // else{
                         auto temp_buffer = cur_buffer_1;
                         cur_buffer_1 = cur_buffer_2;
@@ -2562,14 +2591,14 @@ template <COMPMODE CompMode, class QuantizeFunc>
                             auto cur_offset =  cur_ij_offset + stride3x + k;
                            // if (visited[cur_offset]==0 )
                             //   std::cout<<"e2 "<<i<<" "<<j<<" "<<k<<" "<<cur_offset<<std::endl;
-                           
+
                            cur_buffer_4[buffer_idx++] = data[cur_offset];
 
                             //cur_buffer_4[buffer_idx++] = data[0];
 
                         }
                     // }
-                    interp_cubic_and_quantize<CompMode>(cur_buffer_1,cur_buffer_2,cur_buffer_3,cur_buffer_4, vector_len, 
+                    interp_cubic_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1,cur_buffer_2,cur_buffer_3,cur_buffer_4, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
 
                     // interp_cubic(cur_buffer_1,cur_buffer_2,cur_buffer_3,cur_buffer_4, cur_pred_buffer, vector_len);
@@ -2579,10 +2608,10 @@ template <COMPMODE CompMode, class QuantizeFunc>
                     //     auto d = data + cur_ij_offset + k;
                     //   // if (d-data < 0 || d-data>=num_elements)
                     //   //      std::cout<<i<<" "<<j<<" "<<k<<std::endl;
-                    //     quantize_func(d - data, *d, pred, tid);
+                    //     quantize_point<CompMode, SkipOverwrite>(d - data, *d, pred, tid);
 
                     // }
-                    
+
                 }
                 if (n % 2 == 1) {
                     if (n > 3) {
@@ -2591,7 +2620,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                         cur_buffer_1 = cur_buffer_2;
                         cur_buffer_2 = cur_buffer_3;
                         cur_buffer_3 = cur_buffer_4;
-                        interp_quad2_and_quantize<CompMode>(cur_buffer_1, cur_buffer_2, cur_buffer_3, vector_len, 
+                        interp_quad2_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, cur_buffer_3, vector_len,
                             data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
 
                     }
@@ -2600,13 +2629,13 @@ template <COMPMODE CompMode, class QuantizeFunc>
                     if (n > 4) {
                         // size_t buffer_idx = 0;
                         auto cur_ij_offset = offset + (n - 3) * dim_offsets[0] + j * dim_offsets[1];
-                        interp_quad2_and_quantize<CompMode>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len, 
+                        interp_quad2_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
                             data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
                     }
                 //     // else if (n > 2) {
                 //         // size_t buffer_idx = 0;
                 //         auto cur_ij_offset = offset + (n - 1) * dim_offsets[0] + j * dim_offsets[1];
-                //         interp_linear1_and_quantize<CompMode>(cur_buffer_2, cur_buffer_3, vector_len, 
+                //         interp_linear1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, vector_len,
                 //             data + cur_ij_offset, strides[2], cur_ij_offset, tid);
                 //     // }
                 }
@@ -2621,7 +2650,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
             // }
             if (n % 2 == 0 && n > 2) {
                 boundaries.push_back(n - 1);
-            }       
+            }
 
             for (auto boundary : boundaries) {
                 begins[direction] = boundary;
@@ -2637,15 +2666,15 @@ template <COMPMODE CompMode, class QuantizeFunc>
                                 quantize_func(d - data, *d,
                                               interp_quad_2(*(d - stride3x), *(d - stride), *(d + stride)), tid);
                             else
-                                quantize_func(d - data, *d, interp_linear1(*(d - stride3x), *(d - stride)), tid);
+                                quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear1(*(d - stride3x), *(d - stride)), tid);
                         } else {
                             if (boundary + 3 < n)
                                 quantize_func(d - data, *d,
                                               interp_quad_1(*(d - stride), *(d + stride), *(d + stride3x)), tid);
                             else if (boundary + 1 < n)
-                                quantize_func(d - data, *d, interp_linear(*(d - stride), *(d + stride)), tid);
+                                quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear(*(d - stride), *(d + stride)), tid);
                             else
-                                quantize_func(d - data, *d, *(d - stride), tid);
+                                quantize_point<CompMode, SkipOverwrite>(d - data, *d, *(d - stride), tid);
                         }
                     });
             }
@@ -2653,7 +2682,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
         return predict_error;
     }
 
-    template <COMPMODE CompMode, class QuantizeFunc>
+    template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
     double interpolation_1d_simd_3d_y(T *data, const std::array<size_t, N> &begin_idx,
                                               const std::array<size_t, N> &end_idx, const size_t &direction,
                                               std::array<size_t, N> &strides, const size_t &math_stride,
@@ -2685,16 +2714,16 @@ template <COMPMODE CompMode, class QuantizeFunc>
             // strides[direction] = 2;
             // foreach_omp2
             //     <T, N>(data, offset, begins, ends, strides, dim_offsets,
-            //            [&](T *d, int tid) { quantize_func(d - data, *d, interp_linear(*(d - stride), *(d + stride)), tid); });
+            //            [&](T *d, int tid) { quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear(*(d - stride), *(d + stride)), tid); });
             // if (n % 2 == 0) {
             //     begins[direction] = n - 1;
             //     ends[direction] = n;
             //     foreach_omp2
             //         <T, N>(data, offset, begins, ends, strides, dim_offsets, [&](T *d, int tid) {
             //             if (n < 3)
-            //                 quantize_func(d - data, *d, *(d - stride), tid);
+            //                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, *(d - stride), tid);
             //             else
-            //                 quantize_func(d - data, *d, interp_linear1(*(d - stride2x), *(d - stride)), tid);
+            //                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear1(*(d - stride2x), *(d - stride)), tid);
             //         });
             // }
             begins[direction] = 1;
@@ -2735,14 +2764,14 @@ template <COMPMODE CompMode, class QuantizeFunc>
                             auto cur_offset =  cur_ij_offset + stride + k;
                            // if (visited[cur_offset]==0 )
                             //   std::cout<<"e2 "<<i<<" "<<j<<" "<<k<<" "<<cur_offset<<std::endl;
-                           
+
                            cur_buffer_2[buffer_idx++] = data[cur_offset];
 
                             //cur_buffer_4[buffer_idx++] = data[0];
 
                         }
                     }
-                    interp_linear_and_quantize<CompMode>(cur_buffer_1, cur_buffer_2, vector_len, 
+                    interp_linear_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
                     // interp_linear(cur_buffer_1,cur_buffer_2, cur_pred_buffer, vector_len);
                     // buffer_idx = 0;
@@ -2751,10 +2780,10 @@ template <COMPMODE CompMode, class QuantizeFunc>
                     //     auto d = data + cur_ij_offset + k;
                     //   // if (d-data < 0 || d-data>=num_elements)
                     //   //      std::cout<<i<<" "<<j<<" "<<k<<std::endl;
-                    //     quantize_func(d - data, *d, pred, tid);
+                    //     quantize_point<CompMode, SkipOverwrite>(d - data, *d, pred, tid);
 
                     // }
-                    
+
                 }
                 if (n % 2 == 0) {
                     auto cur_ij_offset = offset + i * dim_offsets[0] + (n - 1) * dim_offsets[1];
@@ -2765,7 +2794,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                         for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
                             cur_buffer_2[buffer_idx++] = data[cur_ij_offset - stride + k];
                         }
-                        interp_equal_and_quantize<CompMode>(cur_buffer_2, vector_len,
+                        interp_equal_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
                     }
                     else {
@@ -2774,11 +2803,11 @@ template <COMPMODE CompMode, class QuantizeFunc>
                             auto cur_offset =  cur_ij_offset - stride2x + k;
                            cur_buffer_1[buffer_idx++] = data[cur_offset];
                         }
-                        interp_linear1_and_quantize<CompMode>(cur_buffer_1, cur_buffer_2, vector_len,
+                        interp_linear1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
                     }
                 }
-                
+
             }
             // if (n % 2 == 0) {
             //     begins[direction] = n - 1;
@@ -2786,9 +2815,9 @@ template <COMPMODE CompMode, class QuantizeFunc>
             //     foreach_omp2 //todo: this is infficient when direction = 0
             //         <T, N>(data, offset, begins, ends, strides, dim_offsets, [&](T *d, int tid) {
             //             if (n < 3)
-            //                 quantize_func(d - data, *d, *(d - stride), tid);
+            //                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, *(d - stride), tid);
             //             else
-            //                 quantize_func(d - data, *d, interp_linear1(*(d - stride2x), *(d - stride)), tid);
+            //                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear1(*(d - stride2x), *(d - stride)), tid);
             //         });
             // }
         } else {
@@ -2806,7 +2835,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                 auto cur_buffer_1 = interp_buffer_1 + buffer_offset;
                 auto cur_buffer_2 = interp_buffer_2 + buffer_offset;
                 auto cur_buffer_3 = interp_buffer_3 + buffer_offset;
-                auto cur_buffer_4 = interp_buffer_4 + buffer_offset; 
+                auto cur_buffer_4 = interp_buffer_4 + buffer_offset;
                 // auto cur_pred_buffer = pred_buffer + buffer_offset;
                 if (n >= 5) {
                     size_t buffer_idx = 0;
@@ -2818,7 +2847,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                         cur_buffer_4[buffer_idx] = data[cur_offset + stride3x];
                         ++buffer_idx;
                     }
-                    interp_quad1_and_quantize<CompMode>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len, 
+                    interp_quad1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
                 }
                 else if (n >= 3) {
@@ -2830,7 +2859,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                         cur_buffer_3[buffer_idx] = data[cur_offset + stride];
                         ++buffer_idx;
                     }
-                    interp_linear_and_quantize<CompMode>(cur_buffer_2, cur_buffer_3, vector_len, 
+                    interp_linear_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
                 }
 
@@ -2842,7 +2871,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                         cur_buffer_2[buffer_idx] = data[cur_offset - stride];
                         ++buffer_idx;
                     }
-                    interp_equal_and_quantize<CompMode>(cur_buffer_2, vector_len, 
+                    interp_equal_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
                 }
                 for(size_t j = begins[1]; j < ends[1]; j += strides[1]){
@@ -2881,8 +2910,8 @@ template <COMPMODE CompMode, class QuantizeFunc>
                             //cur_buffer_4[buffer_idx++] = data[0];
                         }
                     // }
-                    
-                    interp_cubic_and_quantize<CompMode>(cur_buffer_1, cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len, 
+
+                    interp_cubic_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
 
                     // interp_cubic(cur_buffer_1,cur_buffer_2,cur_buffer_3,cur_buffer_4, cur_pred_buffer, vector_len);
@@ -2892,16 +2921,16 @@ template <COMPMODE CompMode, class QuantizeFunc>
                     //     auto d = data + cur_ij_offset + k;
                     //   // if (d-data < 0 || d-data>=num_elements)
                     //   //      std::cout<<i<<" "<<j<<" "<<k<<std::endl;
-                    //     quantize_func(d - data, *d, pred, tid);
+                    //     quantize_point<CompMode, SkipOverwrite>(d - data, *d, pred, tid);
 
                     // }
-                    
+
                 }
                 if (n % 2 == 1) {
                     if (n > 3) {
                         // size_t buffer_idx = 0;
                         auto cur_ij_offset = offset + i * dim_offsets[0] + (n - 2) * dim_offsets[1];
-                        interp_quad2_and_quantize<CompMode>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len, 
+                        interp_quad2_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
                             data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
 
                     }
@@ -2913,18 +2942,18 @@ template <COMPMODE CompMode, class QuantizeFunc>
                         cur_buffer_1 = cur_buffer_2;
                         cur_buffer_2 = cur_buffer_3;
                         cur_buffer_3 = cur_buffer_4;
-                        interp_quad2_and_quantize<CompMode>(cur_buffer_1, cur_buffer_2, cur_buffer_3, vector_len, 
+                        interp_quad2_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, cur_buffer_3, vector_len,
                             data + cur_ij_offset, strides[2], cur_ij_offset, tid, quantize_func);
                     }
                     // else if (n > 2) {
                         // size_t buffer_idx = 0;
                         // auto cur_ij_offset = offset + i * dim_offsets[0] + (n - 1) * dim_offsets[1];
-                        // interp_linear1_and_quantize<CompMode>(cur_buffer_2, cur_buffer_3, vector_len, 
+                        // interp_linear1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, vector_len,
                         //     data + cur_ij_offset, strides[2], cur_ij_offset, tid);
                     // }
                 }
             }
-            
+
             std::vector<size_t> boundaries;
             // boundaries.push_back(1);
             // if (n % 2 == 1 && n > 3) {
@@ -2936,7 +2965,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
             if (n % 2 == 0 && n > 2) {
                 boundaries.push_back(n - 1);
             }
-  
+
             for (auto boundary : boundaries) {
                 begins[direction] = boundary;
                 ends[direction] = boundary + 1;
@@ -2951,15 +2980,15 @@ template <COMPMODE CompMode, class QuantizeFunc>
                                 quantize_func(d - data, *d,
                                               interp_quad_2(*(d - stride3x), *(d - stride), *(d + stride)), tid);
                             else
-                                quantize_func(d - data, *d, interp_linear1(*(d - stride3x), *(d - stride)), tid);
+                                quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear1(*(d - stride3x), *(d - stride)), tid);
                         } else {
                             if (boundary + 3 < n)
                                 quantize_func(d - data, *d,
                                               interp_quad_1(*(d - stride), *(d + stride), *(d + stride3x)), tid);
                             else if (boundary + 1 < n)
-                                quantize_func(d - data, *d, interp_linear(*(d - stride), *(d + stride)), tid);
+                                quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear(*(d - stride), *(d + stride)), tid);
                             else
-                                quantize_func(d - data, *d, *(d - stride), tid);
+                                quantize_point<CompMode, SkipOverwrite>(d - data, *d, *(d - stride), tid);
                         }
                     });
             }
@@ -2968,7 +2997,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
     }
 
 
-    template <COMPMODE CompMode, class QuantizeFunc>
+    template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
     double interpolation_1d_simd_3d_x(T *data, const std::array<size_t, N> &begin_idx,
                                               const std::array<size_t, N> &end_idx, const size_t &direction,
                                               std::array<size_t, N> &strides, const size_t &math_stride,
@@ -3001,16 +3030,16 @@ template <COMPMODE CompMode, class QuantizeFunc>
             // size_t stride2x = 2 * stride;
             // foreach_omp2
             //     <T, N>(data, offset, begins, ends, strides, dim_offsets,
-            //            [&](T *d, int tid) { quantize_func(d - data, *d, interp_linear(*(d - stride), *(d + stride)), tid); });
+            //            [&](T *d, int tid) { quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear(*(d - stride), *(d + stride)), tid); });
             // if (n % 2 == 0) {
             //     begins[direction] = n - 1;
             //     ends[direction] = n;
             //     foreach_omp2
             //         <T, N>(data, offset, begins, ends, strides, dim_offsets, [&](T *d, int tid) {
             //             if (n < 3)
-            //                 quantize_func(d - data, *d, *(d - stride), tid);
+            //                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, *(d - stride), tid);
             //             else
-            //                 quantize_func(d - data, *d, interp_linear1(*(d - stride2x), *(d - stride)), tid);
+            //                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear1(*(d - stride2x), *(d - stride)), tid);
             //         });
             // }
 
@@ -3023,17 +3052,17 @@ template <COMPMODE CompMode, class QuantizeFunc>
                 auto tid = omp_get_thread_num();
                 for(size_t j = begins[1]; j < ends[1]; j += strides[1]){
                     auto cur_ij_offset = offset + i * dim_offsets[0] + j * dim_offsets[1];
-                    interp_linear_and_quantize_1D_line<CompMode>(
+                    interp_linear_and_quantize_1D_line<CompMode, false, SkipOverwrite>(
                         data, n, dim_offsets[direction], cur_ij_offset, tid, quantize_func);
                     // for (size_t k = 0; k < odd_len; ++k ){
                     //     auto pred = cur_pred_buffer[k];
                     //     auto d = data + cur_ij_offset + (2 * k + 1) * dim_offsets[2];
                     //   // if (d-data < 0 || d-data>=num_elements)
                     //   //      std::cout<<i<<" "<<j<<" "<<k<<std::endl;
-                    //     quantize_func(d - data, *d, pred, tid);
+                    //     quantize_point<CompMode, SkipOverwrite>(d - data, *d, pred, tid);
 
                     // }
-                    
+
                 }
             }
         } else {
@@ -3048,7 +3077,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                 auto tid = omp_get_thread_num();
                 for(size_t j = begins[1]; j < ends[1]; j += strides[1]){
                     auto cur_ij_offset = offset + i * dim_offsets[0] + j * dim_offsets[1];
-                    interp_cubic_and_quantize_1D_line<CompMode>(
+                    interp_cubic_and_quantize_1D_line<CompMode, false, SkipOverwrite>(
                         data, n, dim_offsets[direction], cur_ij_offset, tid, quantize_func);
                     // interp_cubic_1D(cur_buffer,cur_pred_buffer, n);
                     // for (size_t k = 0; k < odd_len; ++k ){
@@ -3056,10 +3085,10 @@ template <COMPMODE CompMode, class QuantizeFunc>
                     //     auto d = data + cur_ij_offset + (2 * k + 1) * dim_offsets[2];
                     //   // if (d-data < 0 || d-data>=num_elements)
                     //   //      std::cout<<i<<" "<<j<<" "<<k<<std::endl;
-                    //     quantize_func(d - data, *d, pred, tid);
+                    //     quantize_point<CompMode, SkipOverwrite>(d - data, *d, pred, tid);
 
                     // }
-                    
+
                 }
             }
         }
@@ -3067,7 +3096,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
     }
 
 
-    template <COMPMODE CompMode, class QuantizeFunc>
+    template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
     double interpolation_1d_simd(T *data, size_t begin, size_t end, size_t math_stride,
                                  const std::string &interp_func, QuantizeFunc &&quantize_func) {
         size_t n = (end - begin) / math_stride + 1;
@@ -3078,9 +3107,9 @@ template <COMPMODE CompMode, class QuantizeFunc>
         size_t cur_ij_offset = begin * original_dim_offsets[0];
         int tid = omp_get_thread_num();
         if (interp_func == "linear") {
-            interp_linear_and_quantize_1D_line<CompMode, true>(data, n, stride, cur_ij_offset, tid, quantize_func);
+            interp_linear_and_quantize_1D_line<CompMode, true, SkipOverwrite>(data, n, stride, cur_ij_offset, tid, quantize_func);
         } else {
-            interp_cubic_and_quantize_1D_line<CompMode, true>(data, n, stride, cur_ij_offset, tid, quantize_func);
+            interp_cubic_and_quantize_1D_line<CompMode, true, SkipOverwrite>(data, n, stride, cur_ij_offset, tid, quantize_func);
         }
         return 0;
     }
@@ -3088,7 +3117,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
 
 
 
-    template <COMPMODE CompMode, class QuantizeFunc>
+    template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
     double interpolation(T *data, std::array<size_t, N> begin, std::array<size_t, N> end,
                          const std::string &interp_func, QuantizeFunc &&quantize_func, const int direction,
                          size_t stride = 1) {
@@ -3099,7 +3128,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
         std::tie(real_eb, real_ebx2, real_ebx2_r) = quantizer.get_all_eb();
         ebx2_r_avx = _mm256_set1_pd(real_ebx2_r);
         ebx2_avx = _mm256_set1_pd(real_ebx2);
-        
+
         if constexpr (std::is_same_v<T, float>) {
             rel_eb_avx_f = _mm256_set1_ps(real_eb);
             nrel_eb_avx_f = _mm256_set1_ps(-real_eb);
@@ -3113,9 +3142,9 @@ template <COMPMODE CompMode, class QuantizeFunc>
             if constexpr (std::is_integral_v<T>) {
                 return interpolation_1d(data, begin[0], end[0], stride, interp_func, quantize_func);
             } else {
-                return interpolation_1d_simd<CompMode>(data, begin[0], end[0], stride, interp_func, quantize_func);
+                return interpolation_1d_simd<CompMode, SkipOverwrite>(data, begin[0], end[0], stride, interp_func, quantize_func);
             }
-        } 
+        }
         // else if constexpr (N == 2) {  // old API
         //     double predict_error = 0;
         //     size_t stride2x = stride * 2;
@@ -3135,7 +3164,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
         //             stride * original_dim_offsets[dims[1]], interp_func, quantize_func);
         //     }
         //     return predict_error;
-        // } 
+        // }
         else if constexpr (N == 2) {
             double predict_error = 0;
             size_t stride2x = stride * 2;
@@ -3144,7 +3173,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
             std::array<size_t, N> begin_idx = begin, end_idx = end;
             strides[dims[0]] = 1;
             // size_t max_interp_seq_length = 0;
-            //  for (uint i = 0; i < N; ++i) 
+            //  for (uint i = 0; i < N; ++i)
             //     max_interp_seq_length = std::max(max_interp_seq_length, (end[i]-begin[i])/stride );
             for (uint i = 1; i < N; ++i) {
                 begin_idx[dims[i]] = (begin[dims[i]] ? begin[dims[i]] + stride2x : 0);
@@ -3152,20 +3181,20 @@ template <COMPMODE CompMode, class QuantizeFunc>
             }
             if constexpr (!std::is_integral_v<T>) {
                 if(direction == 0 ){//xy
-                    predict_error += interpolation_1d_simd_2d_y<CompMode>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_2d_y<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
                     // std::cout << "after x direction" << std::endl;
                     begin_idx[1] = begin[1];
                     begin_idx[0] = (begin[0] ? begin[0] + stride : 0);
                     strides[0] = stride;
-                    predict_error += interpolation_1d_simd_2d_x<CompMode>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_2d_x<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
                 }
                 else {
-                    predict_error += interpolation_1d_simd_2d_x<CompMode>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_2d_x<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
                     // std::cout << "after x direction" << std::endl;
                     begin_idx[0] = begin[0];
                     begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
                     strides[1] = stride;
-                    predict_error += interpolation_1d_simd_2d_y<CompMode>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_2d_y<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
                 }
             } else {
                 for (size_t j = (begin[dims[1]] ? begin[dims[1]] + stride2x : 0); j <= end[dims[1]]; j += stride2x) {
@@ -3200,11 +3229,11 @@ template <COMPMODE CompMode, class QuantizeFunc>
             //         stride * original_dim_offsets[dims[1]], interp_func, quantize_func);
             // }
             return predict_error;
-        } 
+        }
         else if constexpr (N == 3 || N == 4) {  // new API (for faster speed)
 // #ifdef SZo_PRINT_TIMINGS
 //             Timer timer(true);
-// #endif   
+// #endif
             double predict_error = 0;
             size_t stride2x = stride * 2;
             const std::array<int, N> dims = dim_sequences[direction];
@@ -3217,34 +3246,34 @@ template <COMPMODE CompMode, class QuantizeFunc>
             }
             if constexpr (N == 3 && !std::is_integral_v<T>){//avx
                 if(direction == 0 ){//xyz
-                    predict_error += interpolation_1d_simd_3d_z<CompMode>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_3d_z<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
                     //predict_error += interpolation_1d_fastest_dim_first(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
                     begin_idx[1] = begin[1];
                     begin_idx[0] = (begin[0] ? begin[0] + stride : 0);
                     strides[0] = stride;
-                    predict_error += interpolation_1d_simd_3d_y<CompMode>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_3d_y<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
                    // predict_error += interpolation_1d_fastest_dim_first(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
                     begin_idx[2] = begin[2];
                     begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
                     strides[1] = stride;
                     //predict_error += interpolation_1d_fastest_dim_first(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
-                    predict_error += interpolation_1d_simd_3d_x<CompMode>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_3d_x<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
                 }
                 else{//zyx
-                    predict_error += interpolation_1d_simd_3d_x<CompMode>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_3d_x<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
                     //predict_error += interpolation_1d_fastest_dim_first(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
                     begin_idx[1] = begin[1];
                     begin_idx[2] = (begin[2] ? begin[2] + stride : 0);
                     strides[2] = stride;
-                    predict_error += interpolation_1d_simd_3d_y<CompMode>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_3d_y<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
                    // predict_error += interpolation_1d_fastest_dim_first(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
                     begin_idx[0] = begin[0];
                     begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
                     strides[1] = stride;
-                    predict_error += interpolation_1d_simd_3d_z<CompMode>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_3d_z<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
                     //predict_error += interpolation_1d_fastest_dim_first(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
                 }
-                
+
             }
 
             else{
@@ -3253,7 +3282,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
                 begin_idx[dims[i]] = begin[dims[i]];
                 begin_idx[dims[i - 1]] = (begin[dims[i - 1]] ? begin[dims[i - 1]] + stride : 0);
                 strides[dims[i - 1]] = stride;
-               
+
                 predict_error += interpolation_1d_fastest_dim_first(data, begin_idx, end_idx, dims[i], strides, stride, interp_func, quantize_func);
                 }
             }
@@ -3264,7 +3293,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
         } else {
             throw std::runtime_error("Unsupported dimension in InterpolationDecomposition");
         }
-        
+
     }
 
     int interp_level = -1;
@@ -3278,7 +3307,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
     std::vector<std::array<int, N>> dim_sequences;
     int direction_sequence_id;
     size_t anchor_stride = 0;
-    
+
     int radius = 32768;
     double real_eb = 1;
     double real_ebx2_r = 1;
@@ -3301,7 +3330,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
 
     int16_t* total_quant_inds;
     int16_t** local_quant_inds;
-    CacheLineInt* local_quant_index; 
+    CacheLineInt* local_quant_index;
 #ifdef __AVX2__
     // for avx
     __m256d radius_avx;
@@ -3326,7 +3355,7 @@ template <COMPMODE CompMode, class QuantizeFunc>
     //std::vector<size_t> level_prefix;
     //std::vector<std::array<size_t,N> >reduced_dim_offsets;
 
-    
+
 };
 
 template <class T, uint N, class QuantizerOMP>

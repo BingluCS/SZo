@@ -40,7 +40,7 @@ class LinearQuantizer : public concepts::QuantizerInterface<T, int> {
         T diff = data - pred;
         int quant_index = static_cast<int>(std::nearbyint(diff * this->double_error_bound_reciprocal));
         if (quant_index > -this->radius && quant_index < this->radius ) {
-            //if (diff < 0) 
+            //if (diff < 0)
             //    quant_index = -quant_index;
             //auto quant_index_shifted = this->radius + quant_index;
             // fused, f64-intermediate dequant to match the SIMD (svmla / fmadd) paths bit-for-bit
@@ -53,6 +53,24 @@ class LinearQuantizer : public concepts::QuantizerInterface<T, int> {
             } else {
                 unpred.emplace_back(data);
                 return -this->radius;               // escape sentinel = -radius (tracks radius; default -32768)
+            }
+        } else {
+            unpred.emplace_back(data);
+            return -this->radius;
+        }
+    }
+
+    ALWAYS_INLINE int quantize_without_overwrite(T data, T pred) {
+        T diff = data - pred;
+        int quant_index = static_cast<int>(std::nearbyint(diff * this->double_error_bound_reciprocal));
+        if (quant_index > -this->radius && quant_index < this->radius ) {
+            T decompressed_data = static_cast<T>(std::fma(static_cast<double>(quant_index), this->double_error_bound, static_cast<double>(pred)));
+            T err = decompressed_data - data;
+            if (err >= -this->error_bound && err <= this->error_bound) {
+                return quant_index;
+            } else {
+                unpred.emplace_back(data);
+                return -this->radius;
             }
         } else {
             unpred.emplace_back(data);

@@ -29,7 +29,7 @@ class LinearQuantizerOMP : public concepts::QuantizerOMPInterface<T, int> {
     double get_eb() const { return error_bound; }
 
     ALWAYS_INLINE std::tuple<double, double, double> get_all_eb() const { return {error_bound, double_error_bound, double_error_bound_reciprocal}; }
-    
+
     void set_eb(double eb) {
         error_bound = eb;
         double_error_bound = 2 * eb;
@@ -45,7 +45,7 @@ class LinearQuantizerOMP : public concepts::QuantizerOMPInterface<T, int> {
         T diff = data - pred;
         int quant_index = static_cast<int>(std::nearbyint(diff * this->double_error_bound_reciprocal));
         if (quant_index > -this->radius && quant_index < this->radius ) {
-            //if (diff < 0) 
+            //if (diff < 0)
             //    quant_index = -quant_index;
             //auto quant_index_shifted = this->radius + quant_index;
             T decompressed_data = pred + quant_index * this->double_error_bound;
@@ -69,7 +69,7 @@ class LinearQuantizerOMP : public concepts::QuantizerOMPInterface<T, int> {
         T diff = data - pred;
         int quant_index = static_cast<int>(std::nearbyint(diff * this->double_error_bound_reciprocal));
         if (quant_index > -this->radius && quant_index < this->radius ) {
-            //if (diff < 0) 
+            //if (diff < 0)
             //    quant_index = -quant_index;
             //auto quant_index_shifted = this->radius + quant_index;
             T decompressed_data = pred + quant_index * this->double_error_bound;
@@ -78,6 +78,24 @@ class LinearQuantizerOMP : public concepts::QuantizerOMPInterface<T, int> {
             if (err >= -this->error_bound && err <= this->error_bound) {
                 data = decompressed_data;
                 return quant_index;                 // int16: no +radius
+            } else {
+                save_unpred2(data, tid);
+                return -this->radius;
+            }
+        } else {
+            save_unpred2(data, tid);
+            return -this->radius;
+        }
+    }
+
+    ALWAYS_INLINE int quantize_without_overwrite2(T data, T pred, size_t tid) {
+        T diff = data - pred;
+        int quant_index = static_cast<int>(std::nearbyint(diff * this->double_error_bound_reciprocal));
+        if (quant_index > -this->radius && quant_index < this->radius ) {
+            T decompressed_data = pred + quant_index * this->double_error_bound;
+            T err = decompressed_data - data;
+            if (err >= -this->error_bound && err <= this->error_bound) {
+                return quant_index;
             } else {
                 save_unpred2(data, tid);
                 return -this->radius;
@@ -157,7 +175,7 @@ class LinearQuantizerOMP : public concepts::QuantizerOMPInterface<T, int> {
     }
     ALWAYS_INLINE int save_unpred(T ori, size_t data_idx){
         #ifdef _OPENMP
-        #pragma omp critical 
+        #pragma omp critical
         {
             unpred.push_back(ori);
             unpred_idx.push_back(data_idx);
@@ -198,7 +216,7 @@ class LinearQuantizerOMP : public concepts::QuantizerOMPInterface<T, int> {
         if (unpred_size > 0) {
             assert (unpred_size == unpred_idx.size());
             write(unpred.data(), unpred_size, c);
-            write(unpred_idx.data(), unpred_size, c);       
+            write(unpred_idx.data(), unpred_size, c);
         }
     }
 
@@ -208,7 +226,7 @@ class LinearQuantizerOMP : public concepts::QuantizerOMPInterface<T, int> {
         write(this->radius, c);
         // write( local_unpred_idx[0].value, c);
         // if ( local_unpred_idx[0].value > 0) {
-        //     write(local_unpred[0], local_unpred_idx[0].value, c); 
+        //     write(local_unpred[0], local_unpred_idx[0].value, c);
         // }
     }
 
@@ -219,7 +237,7 @@ class LinearQuantizerOMP : public concepts::QuantizerOMPInterface<T, int> {
         // std::cout << "local_unpred_idx[tid].value: " << local_unpred_idx[tid].value << std::endl;
         write( local_unpred_idx[tid].value, c);
         if ( local_unpred_idx[tid].value > 0) {
-            write(local_unpred[tid], local_unpred_idx[tid].value, c); 
+            write(local_unpred[tid], local_unpred_idx[tid].value, c);
         }
     //     std::cout << "loaded local unpred size: " << local_unpred_idx[tid].value << " for tid " << tid << std::endl;
     //     std::string filename = "unpred_decmp-" + std::to_string(tid);
