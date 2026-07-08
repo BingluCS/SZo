@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyszo"
-version = "1.0.2"
+version = "1.0.0"
 authors = [
     { name = "SZo Team" },
 ]

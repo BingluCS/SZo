@@ -2686,7 +2686,7 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
     double interpolation_1d_simd_3d_y(T *data, const std::array<size_t, N> &begin_idx,
                                               const std::array<size_t, N> &end_idx, const size_t &direction,
                                               std::array<size_t, N> &strides, const size_t &math_stride,
-                                              const std::string &interp_func, QuantizeFunc &&quantize_func) {
+                                              const std::string &interp_func, QuantizeFunc &&quantize_func, size_t zi_begin=0, size_t zi_end=~size_t(0), int force_tid=-1) {
         assert(direction==1  && N==3);
         for (size_t i = 0; i < N; ++i) {
             if (end_idx[i] < begin_idx[i]) return 0;
@@ -2707,6 +2707,8 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
             offset += original_dim_offsets[i] * begin_idx[i];
         }
         dim_offsets[direction] = stride;
+        if (zi_begin > begins[0]) begins[0] = zi_begin;
+        if (zi_end < ends[0]) ends[0] = zi_end;
         size_t stride2x = 2 * stride;
         if (interp_func == "linear") {
             // begins[direction] = 1;
@@ -2731,9 +2733,9 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
             strides[direction] = 2;
             size_t vector_len = ends[2] > begins[2] ? (ends[2]-begins[2]-1)/strides[2] + 1 : 0;
 
-            #pragma omp parallel for
+            #pragma omp parallel for if(force_tid < 0)
             for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
-                auto tid = omp_get_thread_num();
+                int tid = (force_tid >= 0) ? force_tid : omp_get_thread_num();
                 auto buffer_offset = buffer_len * tid;
                 auto cur_buffer_1 = interp_buffer_1 + buffer_offset;
                 auto cur_buffer_2 = interp_buffer_2 + buffer_offset;
@@ -2828,9 +2830,9 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
             strides[direction] = 2;
             size_t vector_len = ends[2] > begins[2] ? (ends[2]-begins[2]-1)/strides[2] + 1 : 0;
 
-            #pragma omp parallel for
+            #pragma omp parallel for if(force_tid < 0)
             for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
-                auto tid = omp_get_thread_num();
+                int tid = (force_tid >= 0) ? force_tid : omp_get_thread_num();
                 auto buffer_offset = buffer_len * tid;
                 auto cur_buffer_1 = interp_buffer_1 + buffer_offset;
                 auto cur_buffer_2 = interp_buffer_2 + buffer_offset;
@@ -2990,7 +2992,7 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
                             else
                                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, *(d - stride), tid);
                         }
-                    });
+                    }, force_tid);
             }
         }
         return predict_error;
@@ -3001,7 +3003,7 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
     double interpolation_1d_simd_3d_x(T *data, const std::array<size_t, N> &begin_idx,
                                               const std::array<size_t, N> &end_idx, const size_t &direction,
                                               std::array<size_t, N> &strides, const size_t &math_stride,
-                                              const std::string &interp_func, QuantizeFunc &&quantize_func) {
+                                              const std::string &interp_func, QuantizeFunc &&quantize_func, size_t zi_begin=0, size_t zi_end=~size_t(0), int force_tid=-1) {
         // assert(direction==2 && N==3);
         for (size_t i = 0; i < N; ++i) {
             if (end_idx[i] < begin_idx[i]) return 0;
@@ -3022,6 +3024,8 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
             offset += original_dim_offsets[i] * begin_idx[i];
         }
         dim_offsets[direction] = stride;
+        if (zi_begin > begins[0]) begins[0] = zi_begin;
+        if (zi_end < ends[0]) ends[0] = zi_end;
 
         if (interp_func == "linear") {
             // begins[direction] = 1;
@@ -3047,9 +3051,9 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
             ends[direction] = n;
             strides[direction] = 2;
             // size_t odd_len = n/2;//, even_len = n - odd_len;
-            #pragma omp parallel for
+            #pragma omp parallel for if(force_tid < 0)
             for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
-                auto tid = omp_get_thread_num();
+                int tid = (force_tid >= 0) ? force_tid : omp_get_thread_num();
                 for(size_t j = begins[1]; j < ends[1]; j += strides[1]){
                     auto cur_ij_offset = offset + i * dim_offsets[0] + j * dim_offsets[1];
                     interp_linear_and_quantize_1D_line<CompMode, false, SkipOverwrite>(
@@ -3072,9 +3076,9 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
             ends[direction] = n;
             strides[direction] = 2;
             // size_t odd_len = n/2;//, even_len = n - odd_len;
-            #pragma omp parallel for
+            #pragma omp parallel for if(force_tid < 0)
             for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
-                auto tid = omp_get_thread_num();
+                int tid = (force_tid >= 0) ? force_tid : omp_get_thread_num();
                 for(size_t j = begins[1]; j < ends[1]; j += strides[1]){
                     auto cur_ij_offset = offset + i * dim_offsets[0] + j * dim_offsets[1];
                     interp_cubic_and_quantize_1D_line<CompMode, false, SkipOverwrite>(
@@ -3245,33 +3249,74 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
                 strides[dims[i]] = stride2x;
             }
             if constexpr (N == 3 && !std::is_integral_v<T>){//avx
+                constexpr bool _fuse_xy = true;   // x+y OMP cache fusion, always on (set false for old path)
                 if(direction == 0 ){//xyz
-                    predict_error += interpolation_1d_simd_3d_z<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
-                    //predict_error += interpolation_1d_fastest_dim_first(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_3d_z<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
                     begin_idx[1] = begin[1];
                     begin_idx[0] = (begin[0] ? begin[0] + stride : 0);
                     strides[0] = stride;
-                    predict_error += interpolation_1d_simd_3d_y<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
-                   // predict_error += interpolation_1d_fastest_dim_first(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
-                    begin_idx[2] = begin[2];
-                    begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
-                    strides[1] = stride;
-                    //predict_error += interpolation_1d_fastest_dim_first(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
-                    predict_error += interpolation_1d_simd_3d_x<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
+                    if (_fuse_xy) {
+                        // each thread takes a contiguous z-chunk, runs full y (incl boundary) then x on it -> chunk cached
+                        std::array<size_t, N> by = begin_idx, sy = strides;
+                        std::array<size_t, N> bx = by, sx = sy;
+                        bx[2] = begin[2]; bx[1] = (begin[1] ? begin[1] + stride : 0); sx[1] = stride;
+                        size_t z_ext = end_idx[0] - by[0] + 1;
+                        #pragma omp parallel reduction(+:predict_error)
+                        {
+                            int tid = omp_get_thread_num();
+                            size_t nth = omp_get_num_threads();
+                            size_t nplanes = (z_ext + sy[0] - 1) / sy[0];
+                            size_t ppt = (nplanes + nth - 1) / nth;
+                            size_t zlo = tid * ppt * sy[0];
+                            size_t zhi = (tid + 1) * ppt * sy[0];
+                            for (size_t zt = zlo; zt < zhi; zt += sy[0]) {   // sub-tile = 1 z-plane -> fits L2, y+x fused per plane
+                                std::array<size_t, N> sy2 = sy, sx2 = sx;
+                                predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, by, end_idx, dims[1], sy2, stride, interp_func, quantize_func, zt, zt + sy[0], tid);
+                                predict_error += interpolation_1d_simd_3d_x<CompMode, false>(data, bx, end_idx, dims[2], sx2, stride, interp_func, quantize_func, zt, zt + sy[0], tid);
+                            }
+                        }
+                    } else {
+                        predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                        begin_idx[2] = begin[2];
+                        begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
+                        strides[1] = stride;
+                        predict_error += interpolation_1d_simd_3d_x<CompMode, false>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
+                    }
                 }
                 else{//zyx
-                    predict_error += interpolation_1d_simd_3d_x<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
-                    //predict_error += interpolation_1d_fastest_dim_first(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
-                    begin_idx[1] = begin[1];
-                    begin_idx[2] = (begin[2] ? begin[2] + stride : 0);
-                    strides[2] = stride;
-                    predict_error += interpolation_1d_simd_3d_y<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
-                   // predict_error += interpolation_1d_fastest_dim_first(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    if (_fuse_xy) {
+                        std::array<size_t, N> bx = begin_idx, sx = strides;   // x-config (initial)
+                        std::array<size_t, N> by = bx, sy = sx;
+                        by[1] = begin[1]; by[2] = (begin[2] ? begin[2] + stride : 0); sy[2] = stride;
+                        size_t z_ext = end_idx[0] - bx[0] + 1;
+                        #pragma omp parallel reduction(+:predict_error)
+                        {
+                            int tid = omp_get_thread_num();
+                            size_t nth = omp_get_num_threads();
+                            size_t nplanes = (z_ext + sx[0] - 1) / sx[0];
+                            size_t ppt = (nplanes + nth - 1) / nth;
+                            size_t zlo = tid * ppt * sx[0];
+                            size_t zhi = (tid + 1) * ppt * sx[0];
+                            for (size_t zt = zlo; zt < zhi; zt += sx[0]) {   // sub-tile = 1 z-plane -> fits L2
+                                std::array<size_t, N> sx2 = sx, sy2 = sy;
+                                predict_error += interpolation_1d_simd_3d_x<CompMode, false>(data, bx, end_idx, dims[0], sx2, stride, interp_func, quantize_func, zt, zt + sx[0], tid);
+                                predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, by, end_idx, dims[1], sy2, stride, interp_func, quantize_func, zt, zt + sx[0], tid);
+                            }
+                        }
+                    } else {
+                        predict_error += interpolation_1d_simd_3d_x<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                        begin_idx[1] = begin[1];
+                        begin_idx[2] = (begin[2] ? begin[2] + stride : 0);
+                        strides[2] = stride;
+                        predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    }
+                    // z-pass (last, separate); explicit z-config correct for both branches
                     begin_idx[0] = begin[0];
                     begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
+                    begin_idx[2] = (begin[2] ? begin[2] + stride : 0);
                     strides[1] = stride;
-                    predict_error += interpolation_1d_simd_3d_z<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
-                    //predict_error += interpolation_1d_fastest_dim_first(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
+                    strides[2] = stride;
+                    predict_error += interpolation_1d_simd_3d_z<CompMode, false>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
                 }
 
             }

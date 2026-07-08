@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.18)
-project(SZo VERSION 3.3.1)
+project(SZo VERSION 1.0.0)
 
 #data version defines the version of the compressed data format
 #it is not always equal to the program version (e.g., SZo v3.1.0 and SZo v.3.1.1 may use the same data version of v.3.1.0)
 #only update data version if the new version of the program changes compressed data format
-set(SZo_DATA_VERSION 3.3.0)
+set(SZo_DATA_VERSION 1.0.0)
 
 include(GNUInstallDirs)
 

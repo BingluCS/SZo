@@ -192,7 +192,7 @@ def create_extensions():
 if __name__ == "__main__":
     setup(
         name="pyszo",
-        version="1.0.2",
+        version="1.0.0",
         packages=["pyszo"],
         package_dir={"": "src"},
         ext_modules=create_extensions(),
