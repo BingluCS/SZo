@@ -3185,20 +3185,20 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
             }
             if constexpr (!std::is_integral_v<T>) {
                 if(direction == 0 ){//xy
-                    predict_error += interpolation_1d_simd_2d_y<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_2d_y<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
                     // std::cout << "after x direction" << std::endl;
                     begin_idx[1] = begin[1];
                     begin_idx[0] = (begin[0] ? begin[0] + stride : 0);
                     strides[0] = stride;
-                    predict_error += interpolation_1d_simd_2d_x<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_2d_x<CompMode, false>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
                 }
                 else {
-                    predict_error += interpolation_1d_simd_2d_x<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_2d_x<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
                     // std::cout << "after x direction" << std::endl;
                     begin_idx[0] = begin[0];
                     begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
                     strides[1] = stride;
-                    predict_error += interpolation_1d_simd_2d_y<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_2d_y<CompMode, false>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
                 }
             } else {
                 for (size_t j = (begin[dims[1]] ? begin[dims[1]] + stride2x : 0); j <= end[dims[1]]; j += stride2x) {
