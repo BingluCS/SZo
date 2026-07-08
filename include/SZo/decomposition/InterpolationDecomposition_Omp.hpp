@@ -1934,8 +1934,8 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
             offset += original_dim_offsets[i] * begin_idx[i];
         }
         dim_offsets[direction] = stride;
-        size_t stride2x = 2 * stride;
         if (interp_func == "linear") {
+            size_t last_linear_stride = (SkipOverwrite ? 3 * stride : 2 * stride);
             begins[direction] = 1;
             ends[direction] = (n >= 1) ? (n - 1) : 0;
             strides[direction] = 2;
@@ -2056,7 +2056,7 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
                     auto cur_buffer_2 = interp_buffer_2;
                     for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
                         auto cur_offset =  cur_ij_offset + k;
-                        cur_buffer_1[buffer_idx] = data[cur_offset - stride2x];
+                        cur_buffer_1[buffer_idx] = data[cur_offset - last_linear_stride];
                         cur_buffer_2[buffer_idx] = data[cur_offset - stride];
                         ++buffer_idx;
                     }
@@ -2394,8 +2394,9 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
             offset += original_dim_offsets[i] * begin_idx[i];
         }
         dim_offsets[direction] = stride;
-        size_t stride2x = 2 * stride;
+
         if (interp_func == "linear") {
+            size_t last_linear_stride = (SkipOverwrite ? 3 * stride : 2 * stride);
             // begins[direction] = 1;
             // ends[direction] = n - 1;
             // strides[direction] = 2;
@@ -2479,7 +2480,7 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
                     else {
                         size_t buffer_idx = 0;
                         for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
-                            auto cur_offset =  cur_ij_offset - stride2x + k;
+                            auto cur_offset =  cur_ij_offset - last_linear_stride + k;
                            cur_buffer_1[buffer_idx++] = data[cur_offset];
                         }
                         interp_linear1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, vector_len,
@@ -2709,8 +2710,8 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
         dim_offsets[direction] = stride;
         if (zi_begin > begins[0]) begins[0] = zi_begin;
         if (zi_end < ends[0]) ends[0] = zi_end;
-        size_t stride2x = 2 * stride;
         if (interp_func == "linear") {
+            size_t last_linear_stride = (SkipOverwrite ? 3 * stride : 2 * stride);
             // begins[direction] = 1;
             // ends[direction] = n - 1;
             // strides[direction] = 2;
@@ -2802,7 +2803,7 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
                     else {
                         size_t buffer_idx = 0;
                         for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
-                            auto cur_offset =  cur_ij_offset - stride2x + k;
+                            auto cur_offset =  cur_ij_offset - last_linear_stride + k;
                            cur_buffer_1[buffer_idx++] = data[cur_offset];
                         }
                         interp_linear1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, vector_len,
@@ -3190,7 +3191,7 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
                     begin_idx[1] = begin[1];
                     begin_idx[0] = (begin[0] ? begin[0] + stride : 0);
                     strides[0] = stride;
-                    predict_error += interpolation_1d_simd_2d_x<CompMode, false>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_2d_x<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
                 }
                 else {
                     predict_error += interpolation_1d_simd_2d_x<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
@@ -3198,7 +3199,7 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
                     begin_idx[0] = begin[0];
                     begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
                     strides[1] = stride;
-                    predict_error += interpolation_1d_simd_2d_y<CompMode, false>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_2d_y<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
                 }
             } else {
                 for (size_t j = (begin[dims[1]] ? begin[dims[1]] + stride2x : 0); j <= end[dims[1]]; j += stride2x) {
@@ -3272,7 +3273,7 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
                             for (size_t zt = zlo; zt < zhi; zt += sy[0]) {   // sub-tile = 1 z-plane -> fits L2, y+x fused per plane
                                 std::array<size_t, N> sy2 = sy, sx2 = sx;
                                 predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, by, end_idx, dims[1], sy2, stride, interp_func, quantize_func, zt, zt + sy[0], tid);
-                                predict_error += interpolation_1d_simd_3d_x<CompMode, false>(data, bx, end_idx, dims[2], sx2, stride, interp_func, quantize_func, zt, zt + sy[0], tid);
+                                predict_error += interpolation_1d_simd_3d_x<CompMode, SkipOverwrite>(data, bx, end_idx, dims[2], sx2, stride, interp_func, quantize_func, zt, zt + sy[0], tid);
                             }
                         }
                     } else {
@@ -3280,7 +3281,7 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
                         begin_idx[2] = begin[2];
                         begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
                         strides[1] = stride;
-                        predict_error += interpolation_1d_simd_3d_x<CompMode, false>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
+                        predict_error += interpolation_1d_simd_3d_x<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
                     }
                 }
                 else{//zyx
@@ -3316,7 +3317,7 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
                     begin_idx[2] = (begin[2] ? begin[2] + stride : 0);
                     strides[1] = stride;
                     strides[2] = stride;
-                    predict_error += interpolation_1d_simd_3d_z<CompMode, false>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
+                    predict_error += interpolation_1d_simd_3d_z<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
                 }
 
             }
