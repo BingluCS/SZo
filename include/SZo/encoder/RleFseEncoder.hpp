@@ -26,6 +26,9 @@
  * the pipeline already links). No zstd headers needed.
  */
 
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
@@ -677,6 +680,12 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
         int K = Kk;
         constexpr size_t pad = 64 / sizeof(T); 
         T *out = new T[N + pad];
+#if defined(__linux__)
+        {   // hint THP for the decoded quant array (large hot buffer; big decompress win)
+            uintptr_t _mb = reinterpret_cast<uintptr_t>(out) & ~static_cast<uintptr_t>(4095);
+            madvise(reinterpret_cast<void *>(_mb), (N + pad) * sizeof(T) + (reinterpret_cast<uintptr_t>(out) - _mb), MADV_HUGEPAGE);
+        }
+#endif
         if (N == 0) 
         return out;
         size_t cs = (N + K - 1) / K;
@@ -901,6 +910,12 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
 
         constexpr size_t pad = 64 / sizeof(T);
         out = new T[N + pad];
+#if defined(__linux__)
+        {   // hint THP for the decoded quant array (large hot buffer; big decompress win)
+            uintptr_t _mb = reinterpret_cast<uintptr_t>(out) & ~static_cast<uintptr_t>(4095);
+            madvise(reinterpret_cast<void *>(_mb), (N + pad) * sizeof(T) + (reinterpret_cast<uintptr_t>(out) - _mb), MADV_HUGEPAGE);
+        }
+#endif
         size_t prod = 0, rrp = 0, vrp = 0, ri = 0, vi = 0;
         uint64_t rda = 0, vda = 0; 
         int rdn = 0, vdn = 0;

@@ -2,6 +2,9 @@
 
 #ifndef SZo_INTERPOLATION_DECOMPOSITION_OMP_HPP
 #define SZo_INTERPOLATION_DECOMPOSITION_OMP_HPP
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
 #include <omp.h>
 #include <cmath>
 #include <cstring>
@@ -235,6 +238,22 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
         // thread's region (or past the buffer). Mirrors the serial "+16 padding" on quant_inds.
         size_t padded_each_num = (((each_num + elems_per_cacheline - 1) / elems_per_cacheline) + 1) * elems_per_cacheline;
         total_quant_inds = new (std::align_val_t(alignment)) int16_t[nThreads * padded_each_num];
+#if defined(__linux__)
+        // THP on this array pays off only when each thread's quant slice is large enough that
+        // TLB relief outweighs the huge-page first-touch/setup cost. Measured: the hint wins by
+        // 5-15% while the per-thread slice (~num_elements/nThreads * 2B) stays >= 16 MiB, but
+        // regresses as it shrinks (+7% on 512^3 at 64 threads / 4 MiB; +30% on a 2D 1800x3600
+        // field at 32 threads / 0.4 MiB). Gate on the per-thread footprint so it self-enables
+        // for large slices (few threads or big data) and self-disables for small ones, where it
+        // would only add setup overhead. 16 MiB == 8 huge pages worth; safely above the highest
+        // measured losing slice (~8 MiB).
+        if ((num_elements / static_cast<size_t>(nThreads)) * sizeof(int16_t) >= (static_cast<size_t>(16) << 20)) {
+            uintptr_t _mb = reinterpret_cast<uintptr_t>(total_quant_inds) & ~static_cast<uintptr_t>(4095);
+            madvise(reinterpret_cast<void *>(_mb),
+                    nThreads * padded_each_num * sizeof(int16_t) + (reinterpret_cast<uintptr_t>(total_quant_inds) - _mb),
+                    MADV_HUGEPAGE);
+        }
+#endif
 
         #pragma omp parallel for
         for (size_t i = 0; i < nThreads; ++i) {

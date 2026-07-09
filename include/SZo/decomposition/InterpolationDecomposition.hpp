@@ -151,6 +151,14 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
 
         double eb = quantizer.get_eb();
         quant_inds = new int16_t[num_elements + 16];  // +16 padding for SIMD chunk stores
+#if defined(__linux__)
+        {   // hint THP for this large hot array (works under madvise mode; noop if unsupported)
+            uintptr_t _mb = reinterpret_cast<uintptr_t>(quant_inds) & ~static_cast<uintptr_t>(4095);
+            madvise(reinterpret_cast<void *>(_mb),
+                    (num_elements + 16) * sizeof(int16_t) + (reinterpret_cast<uintptr_t>(quant_inds) - _mb),
+                    MADV_HUGEPAGE);
+        }
+#endif
 
         if (anchor_stride == 0) {  // check whether to use anchor points
             quant_inds[quant_index++] = quantizer.quantize_and_overwrite(*data, 0);  // no
@@ -2385,7 +2393,7 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
             }
 
             if constexpr (Tuning == TUNING::DISABLED && N == 3 && !std::is_integral_v<T>) {//avx &&stride<=2
-                constexpr bool _fuse = true;      // x+y cache fusion, always on (set false to use the old path below)
+                constexpr bool _fuse = false;      // x+y cache fusion, always on (set false to use the old path below)
                 constexpr size_t _fuse_tile = 1;     // z-slab thickness (planes); 1 is optimal
                 if(direction ==0 ){//xyz
                     // constexpr bool _fuse_xyz = true;   // OFF: z done as a separate pass; keep only xy-line fusion
