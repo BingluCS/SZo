@@ -2,6 +2,10 @@
 #define SZo_INTERPOLATION_DECOMPOSITION_HPP
 
 #include <cmath>
+
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
 #include <cstring>
 #include <cstdlib>
 #include <type_traits>
@@ -31,6 +35,7 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
         static_assert(std::is_base_of<concepts::QuantizerInterface<T, int>, Quantizer>::value,
                       "must implement the quantizer interface");
     }
+
 
     T *decompress(const Config &conf, int16_t* quant_inds_vec, T *dec_data) override {
         init();
@@ -108,6 +113,7 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
             delete [] interp_buffer_2;
             delete [] interp_buffer_3;
             delete [] interp_buffer_4;
+            delete [] z_batch_buf; z_batch_buf = nullptr; z_batch_cap = 0;
         }
         // delete [] pred_buffer;
         return dec_data;
@@ -145,6 +151,7 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
 
         double eb = quantizer.get_eb();
         quant_inds = new int16_t[num_elements + 16];  // +16 padding for SIMD chunk stores
+
         if (anchor_stride == 0) {  // check whether to use anchor points
             quant_inds[quant_index++] = quantizer.quantize_and_overwrite(*data, 0);  // no
         } else {
@@ -208,6 +215,7 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
             delete [] interp_buffer_2;
             delete [] interp_buffer_3;
             delete [] interp_buffer_4;
+            delete [] z_batch_buf; z_batch_buf = nullptr; z_batch_cap = 0;
         }
         // delete [] pred_buffer;
 
@@ -795,7 +803,8 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
     double interpolation_1d_simd_3d_z(T *data, const std::array<size_t, N> &begin_idx,
                                               const std::array<size_t, N> &end_idx, const size_t &direction,
                                               std::array<size_t, N> &strides, const size_t &math_stride,
-                                              const std::string &interp_func, QuantizeFunc &&quantize_func) {
+                                              const std::string &interp_func, QuantizeFunc &&quantize_func,
+                                              size_t gi_begin = 0, size_t gi_end = ~size_t(0)) {
         assert(direction==0  && N==3);
         for (size_t i = 0; i < N; i++) {
             if (end_idx[i] < begin_idx[i]) return 0;
@@ -806,6 +815,12 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
             return 0;
         }
         double predict_error = 0.0;
+        // Plane-major multi-row gather for single-plane windows. Measured SLOWER inside the xyz
+        // wavefront (sources are already L3-hot, so the scratch round-trip costs more than the
+        // gather locality wins: off 0.454 < NB2 0.457 < NB4 0.461 < NB8 0.465 s on dir5). Kept for
+        // reference; would only help a standalone cold-miss z sweep.
+        constexpr bool _z_batch = false;
+        constexpr size_t _z_nb = 8;       // rows per batch
         size_t offset = 0;
         size_t stride = math_stride * original_dim_offsets[direction];
         std::array<size_t, N> begins, ends, dim_offsets;
@@ -825,13 +840,46 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
             size_t vector_len = ends[2] > begins[2] ? (ends[2]-begins[2]-1)/strides[2] + 1 : 0;
 
 
+            size_t li0 = (gi_begin > begins[0]) ? gi_begin : begins[0];       /* window clamp (grid units) */
+            size_t liE = (gi_end < ends[0]) ? gi_end : ends[0];
+            if (_z_batch && gi_end == gi_begin + 2 && gi_begin >= begins[0] && gi_begin < ends[0]) {
+                // single interior plane: gather NB rows per source plane (contiguous sweeps), then quantize
+                const size_t zi_ = gi_begin;
+                const size_t need = 2 * _z_nb * buffer_len;
+                if (z_batch_cap < need) { delete[] z_batch_buf; z_batch_buf = new T[need]; z_batch_cap = need; }
+                T *zs = z_batch_buf;
+                for (size_t j0 = begins[1]; j0 < ends[1]; j0 += strides[1] * _z_nb) {
+                    size_t nb = 0;
+                    for (size_t jj = j0; jj < ends[1] && nb < _z_nb; jj += strides[1]) ++nb;
+                    for (int p = 0; p < 2; ++p) {
+                        const size_t g = zi_ + (p == 0 ? size_t(-1) : size_t(1));
+                        for (size_t b = 0; b < nb; ++b) {
+                            const size_t j = j0 + b * strides[1];
+                            T *buf = zs + (p * _z_nb + b) * buffer_len;
+                            size_t bi = 0;
+                            const size_t base = offset + g * dim_offsets[0] + j * dim_offsets[1];
+                            for (size_t k = begins[2]; k < ends[2]; k += strides[2]) buf[bi++] = data[base + k];
+                        }
+                    }
+                    for (size_t b = 0; b < nb; ++b) {
+                        const size_t j = j0 + b * strides[1];
+                        auto cur_ij_offset = offset + zi_ * dim_offsets[0] + j * dim_offsets[1];
+                        interp_linear_and_quantize<CompMode, SkipOverwrite>(
+                            zs + (0 * _z_nb + b) * buffer_len, zs + (1 * _z_nb + b) * buffer_len, vector_len,
+                            data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                    }
+                }
+                return predict_error;
+            }
             for (size_t j = begins[1]; j < ends[1]; j += strides[1]) {
                 auto cur_buffer_1 = interp_buffer_1;
                 auto cur_buffer_2 = interp_buffer_2;
-                for(size_t i = begins[0]; i < ends[0]; i += strides[0]){
+                bool ran_main = false;
+                for(size_t i = li0; i < liE; i += strides[0]){
+                    ran_main = true;
                     auto cur_ij_offset = offset + i * dim_offsets[0] + j * dim_offsets[1];
                     size_t buffer_idx = 0;
-                    if( i == begins[0]) {
+                    if( i == li0) {
                         for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
                             auto cur_offset =  cur_ij_offset + k;
                             cur_buffer_1[buffer_idx] = data[cur_offset - stride];
@@ -854,8 +902,14 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
                         data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
 
                 }
-                if (n % 2 == 0) {
+                if (n % 2 == 0 && gi_begin <= n - 1 && n - 1 < gi_end) {
                     auto cur_ij_offset = offset + (n - 1) * dim_offsets[0] + j * dim_offsets[1];
+                    if (!ran_main && n >= 3) {           /* windowed call: b2 (row below) is stale */
+                        size_t buffer_idx = 0;
+                        for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                            cur_buffer_2[buffer_idx++] = data[cur_ij_offset - stride + k];
+                        }
+                    }
                     if(n < 3) {
                         // n==2: interior loop skipped, so cur_buffer_2 holds stale rows.
                         // Fill it with the single available neighbor row (below) before predicting.
@@ -885,13 +939,52 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
             ends[direction] = (n >= 3) ? (n - 3) : 0;
             strides[direction] = 2;
             size_t vector_len = ends[2] > begins[2] ? (ends[2]-begins[2]-1)/strides[2] + 1 : 0;
+            size_t ci0 = (gi_begin > begins[0]) ? gi_begin : begins[0];       /* window clamp (grid units) */
+            size_t ciE = (gi_end < ends[0]) ? gi_end : ends[0];
+            if (_z_batch && gi_end == gi_begin + 2 && gi_begin >= begins[0] && gi_begin < ends[0]) {
+                // single interior plane: gather NB rows per source plane (contiguous sweeps), then quantize
+                const size_t zi_ = gi_begin;
+                const size_t need = 4 * _z_nb * buffer_len;
+                if (z_batch_cap < need) { delete[] z_batch_buf; z_batch_buf = new T[need]; z_batch_cap = need; }
+                T *zs = z_batch_buf;
+                static const long gof[4] = {-3, -1, 1, 3};
+                for (size_t j0 = begins[1]; j0 < ends[1]; j0 += strides[1] * _z_nb) {
+                    size_t nb = 0;
+                    for (size_t jj = j0; jj < ends[1] && nb < _z_nb; jj += strides[1]) ++nb;
+                    for (int p = 0; p < 4; ++p) {
+                        const size_t g = (zi_ + gof[p]);
+                        for (size_t b = 0; b < nb; ++b) {
+                            const size_t j = j0 + b * strides[1];
+                            T *buf = zs + (p * _z_nb + b) * buffer_len;
+                            size_t bi = 0;
+                            const size_t base = offset + g * dim_offsets[0] + j * dim_offsets[1];
+                            for (size_t k = begins[2]; k < ends[2]; k += strides[2]) buf[bi++] = data[base + k];
+                        }
+                    }
+                    for (size_t b = 0; b < nb; ++b) {
+                        const size_t j = j0 + b * strides[1];
+                        auto cur_ij_offset = offset + zi_ * dim_offsets[0] + j * dim_offsets[1];
+                        interp_cubic_and_quantize<CompMode, SkipOverwrite>(
+                            zs + (0 * _z_nb + b) * buffer_len, zs + (1 * _z_nb + b) * buffer_len,
+                            zs + (2 * _z_nb + b) * buffer_len, zs + (3 * _z_nb + b) * buffer_len, vector_len,
+                            data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                    }
+                }
+                return predict_error;
+            }
 
             for (size_t j = begins[1]; j < ends[1]; j += strides[1]) {
                 auto cur_buffer_1 = interp_buffer_1;
                 auto cur_buffer_2 = interp_buffer_2;
                 auto cur_buffer_3 = interp_buffer_3;
                 auto cur_buffer_4 = interp_buffer_4;
-                if (n >= 5) {
+                bool primed = false;   /* buffers hold valid sliding-window planes */
+                auto zgather = [&](T *buf, size_t g) {                        /* gather grid-plane g, row j */
+                    size_t bi = 0;
+                    auto base = offset + g * dim_offsets[0] + j * dim_offsets[1];
+                    for (size_t k = begins[2]; k < ends[2]; k += strides[2]) buf[bi++] = data[base + k];
+                };
+                if ((gi_begin <= 1 && 1 < gi_end) && n >= 5) {
                     size_t buffer_idx = 0;
                     auto cur_ij_offset = offset + dim_offsets[0] + j * dim_offsets[1];
                     for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
@@ -903,8 +996,9 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
                     }
                     interp_quad1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                    primed = true;
                 }
-                else if (n >= 3) {
+                else if ((gi_begin <= 1 && 1 < gi_end) && n >= 3) {
                     size_t buffer_idx = 0;
                     auto cur_ij_offset = offset + dim_offsets[0] + j * dim_offsets[1];
                     for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
@@ -916,7 +1010,7 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
                     interp_linear_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
                 }
-                else if (n >= 1) {
+                else if ((gi_begin <= 1 && 1 < gi_end) && n >= 1) {
                     size_t buffer_idx = 0;
                     auto cur_ij_offset = offset + dim_offsets[0] + j * dim_offsets[1];
                     for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
@@ -927,27 +1021,39 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
                     interp_equal_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
                 }
-                for(size_t i = begins[0]; i < ends[0]; i += strides[0]){
+                for(size_t i = ci0; i < ciE; i += strides[0]){
                     auto cur_ij_offset = offset + i * dim_offsets[0] + j * dim_offsets[1];
-                    size_t buffer_idx = 0;
+                    if (primed) {
                         auto temp_buffer = cur_buffer_1;
                         cur_buffer_1 = cur_buffer_2;
                         cur_buffer_2 = cur_buffer_3;
                         cur_buffer_3 = cur_buffer_4;
                         cur_buffer_4 = temp_buffer;
-
-                        buffer_idx = 0;
+                        size_t buffer_idx = 0;
                         for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
                             auto cur_offset =  cur_ij_offset + stride3x + k;
                            cur_buffer_4[buffer_idx++] = data[cur_offset];
                         }
+                    } else {                       /* windowed call: prime all four predictor planes */
+                        zgather(cur_buffer_1, i - 3);
+                        zgather(cur_buffer_2, i - 1);
+                        zgather(cur_buffer_3, i + 1);
+                        zgather(cur_buffer_4, i + 3);
+                        primed = true;
+                    }
                     interp_cubic_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1,cur_buffer_2,cur_buffer_3,cur_buffer_4, vector_len,
                         data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
 
                 }
-                if (n % 2 == 1) {
+                if (n % 2 == 1 && gi_begin <= n - 2 && n - 2 < gi_end) {
                     if (n > 3) {
                         auto cur_ij_offset = offset + (n - 2) * dim_offsets[0] + j * dim_offsets[1];
+                        if (!primed) {             /* windowed call: fetch the planes quad2 reads */
+                            zgather(cur_buffer_2, n - 5);
+                            zgather(cur_buffer_3, n - 3);
+                            zgather(cur_buffer_4, n - 1);
+                            primed = true;
+                        }
                         cur_buffer_1 = cur_buffer_2;
                         cur_buffer_2 = cur_buffer_3;
                         cur_buffer_3 = cur_buffer_4;
@@ -956,9 +1062,15 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
 
                     }
                 }
-                else {
+                else if (n % 2 == 0 && gi_begin <= n - 3 && n - 3 < gi_end) {
                     if (n > 4) {
                         auto cur_ij_offset = offset + (n - 3) * dim_offsets[0] + j * dim_offsets[1];
+                        if (!primed) {             /* windowed call: fetch the planes quad2 reads */
+                            zgather(cur_buffer_2, n - 6);
+                            zgather(cur_buffer_3, n - 4);
+                            zgather(cur_buffer_4, n - 2);
+                            primed = true;
+                        }
                         interp_quad2_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
                             data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
                     }
@@ -972,7 +1084,7 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
             // if (n % 2 == 0 && n > 4) {
             //     boundaries.push_back(n - 3);
             // }
-            if (n % 2 == 0 && n > 2) {
+            if (n % 2 == 0 && n > 2 && gi_begin <= n - 1 && n - 1 < gi_end) {
                 boundaries.push_back(n - 1);
             }
 
@@ -1299,6 +1411,856 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
         return predict_error;
     }
 
+    // Row-level fused y+x wavefront within a z-slab (direction 0 only).
+    // Mirrors interpolation_1d_simd_3d_y (begin_idx = the y-pass config), but as soon as a row
+    // becomes final it is immediately x-interpolated while still cache-hot: after y produces odd
+    // row j, the x cursor sweeps every pending row (element index <= that row). The y predictor
+    // buffers keep their sliding reuse. SkipX applies to the x lines (the final pass); y rows
+    // always write back. x_row_begin / x_col_begin are the x-pass config (bx[1] / bx[2]).
+    template <COMPMODE CompMode, bool SkipX = false, class QuantizeFunc>
+    double interpolation_1d_simd_3d_yx(T *data, const std::array<size_t, N> &begin_idx,
+                                       const std::array<size_t, N> &end_idx,
+                                       std::array<size_t, N> &strides, const size_t &math_stride,
+                                       const std::string &interp_func, QuantizeFunc &&quantize_func,
+                                       size_t zi_begin, size_t zi_end,
+                                       size_t x_row_begin, size_t x_col_begin) {
+        constexpr size_t direction = 1;
+        assert(N == 3);
+        for (size_t i = 0; i < N; i++) {
+            if (end_idx[i] < begin_idx[i]) return 0;
+        }
+        size_t math_begin_idx = begin_idx[direction], math_end_idx = end_idx[direction];
+        size_t n = (math_end_idx - math_begin_idx) / math_stride + 1;
+        double predict_error = 0.0;
+        size_t offset = 0;
+        size_t stride = math_stride * original_dim_offsets[direction];
+        std::array<size_t, N> begins, ends, dim_offsets;
+        for (size_t i = 0; i < N; i++) {
+            begins[i] = 0;
+            ends[i] = end_idx[i] - begin_idx[i] + 1;
+            dim_offsets[i] = original_dim_offsets[i];
+            offset += original_dim_offsets[i] * begin_idx[i];
+        }
+        dim_offsets[direction] = stride;
+        if (zi_begin > begins[0]) begins[0] = zi_begin;   /* slab tiling (covers boundary too) */
+        if (zi_end < ends[0]) ends[0] = zi_end;
+
+        // x-line setup: exactly the rows/columns the separate x pass would process
+        const bool x_linear = (interp_func == "linear");
+        const size_t x_n = (end_idx[2] >= x_col_begin) ? (end_idx[2] - x_col_begin) / math_stride + 1 : 0;
+        const size_t x_stride_e = math_stride * original_dim_offsets[2];
+        const size_t x_base = original_dim_offsets[0] * begin_idx[0] + original_dim_offsets[2] * x_col_begin;
+
+        if (n <= 1) {   // no y targets in this block: still emit all x lines of the slab
+            if (x_n > 1) {
+                for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
+                    for (size_t r = x_row_begin; r <= end_idx[1]; r += math_stride) {
+                        size_t xs = x_stride_e;
+                        size_t ro = x_base + i * original_dim_offsets[0] + r * original_dim_offsets[1];
+                        if (x_linear) interp_linear_and_quantize_1D_line<CompMode, SkipX>(data, x_n, xs, ro, quantize_func);
+                        else          interp_cubic_and_quantize_1D_line<CompMode, SkipX>(data, x_n, xs, ro, quantize_func);
+                    }
+                }
+            }
+            return 0;
+        }
+
+        if (interp_func == "linear") {
+            size_t last_linear_stride = 2 * stride;   // y never skips (not the final pass)
+            begins[direction] = 1;
+            ends[direction] = (n >= 1) ? (n - 1) : 0;
+            strides[direction] = 2;
+            size_t vector_len = ends[2] > begins[2] ? (ends[2]-begins[2]-1)/strides[2] + 1 : 0;
+
+            for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
+                size_t next_x = x_row_begin;
+                auto x_upto = [&](size_t r_last) {   // x-interp every pending row <= r_last (element units)
+                    if (x_n <= 1) return;
+                    for (; next_x <= r_last && next_x <= end_idx[1]; next_x += math_stride) {
+                        size_t xs = x_stride_e;
+                        size_t ro = x_base + i * original_dim_offsets[0] + next_x * original_dim_offsets[1];
+                        interp_linear_and_quantize_1D_line<CompMode, SkipX>(data, x_n, xs, ro, quantize_func);
+                    }
+                };
+                auto cur_buffer_1 = interp_buffer_1;
+                auto cur_buffer_2 = interp_buffer_2;
+                for(size_t j = begins[1]; j < ends[1]; j += strides[1]){
+                    auto cur_ij_offset = offset + i * dim_offsets[0] + j * dim_offsets[1];
+                    size_t buffer_idx = 0;
+                    if( j == begins[1]) {
+                        for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                            auto cur_offset =  cur_ij_offset + k;
+                            cur_buffer_1[buffer_idx] = data[cur_offset - stride];
+                            cur_buffer_2[buffer_idx] = data[cur_offset + stride];
+                            ++buffer_idx;
+                        }
+                    }
+                    else{
+                        auto temp_buffer = cur_buffer_1;
+                        cur_buffer_1 = cur_buffer_2;
+                        cur_buffer_2 = temp_buffer;
+                        buffer_idx = 0;
+                        for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                            auto cur_offset =  cur_ij_offset + stride + k;
+                            cur_buffer_2[buffer_idx++] = data[cur_offset];
+                        }
+                    }
+                    interp_linear_and_quantize<CompMode, false>(cur_buffer_1, cur_buffer_2, vector_len,
+                        data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                    x_upto(begin_idx[1] + j * math_stride);
+                }
+                if (n % 2 == 0) {
+                    auto cur_ij_offset = offset + i * dim_offsets[0] + (n - 1) * dim_offsets[1];
+                    if(n < 3) {
+                        size_t buffer_idx = 0;
+                        for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                            cur_buffer_2[buffer_idx++] = data[cur_ij_offset - stride + k];
+                        }
+                        interp_equal_and_quantize<CompMode, false>(cur_buffer_2, vector_len,
+                        data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                    }
+                    else {
+                        size_t buffer_idx = 0;
+                        for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                            auto cur_offset =  cur_ij_offset - last_linear_stride + k;
+                            cur_buffer_1[buffer_idx++] = data[cur_offset];
+                        }
+                        interp_linear1_and_quantize<CompMode, false>(cur_buffer_1, cur_buffer_2, vector_len,
+                        data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                    }
+                    x_upto(begin_idx[1] + (n - 1) * math_stride);
+                }
+                x_upto(end_idx[1]);   // remaining even-row tail of the plane
+            }
+        } else {
+            size_t stride3x = 3 * stride;
+            begins[direction] = 3;
+            ends[direction] = (n >= 3) ? (n - 3) : 0;
+            strides[direction] = 2;
+            size_t vector_len = ends[2] > begins[2] ? (ends[2]-begins[2]-1)/strides[2] + 1 : 0;
+
+            for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
+                size_t next_x = x_row_begin;
+                auto x_upto = [&](size_t r_last) {
+                    if (x_n <= 1) return;
+                    for (; next_x <= r_last && next_x <= end_idx[1]; next_x += math_stride) {
+                        size_t xs = x_stride_e;
+                        size_t ro = x_base + i * original_dim_offsets[0] + next_x * original_dim_offsets[1];
+                        interp_cubic_and_quantize_1D_line<CompMode, SkipX>(data, x_n, xs, ro, quantize_func);
+                    }
+                };
+                auto cur_buffer_1 = interp_buffer_1;
+                auto cur_buffer_2 = interp_buffer_2;
+                auto cur_buffer_3 = interp_buffer_3;
+                auto cur_buffer_4 = interp_buffer_4;
+                if (n >= 5) {
+                    size_t buffer_idx = 0;
+                    auto cur_ij_offset = offset + i * dim_offsets[0] + dim_offsets[1];
+                    for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                        auto cur_offset =  cur_ij_offset + k;
+                        cur_buffer_2[buffer_idx] = data[cur_offset - stride];
+                        cur_buffer_3[buffer_idx] = data[cur_offset + stride];
+                        cur_buffer_4[buffer_idx] = data[cur_offset + stride3x];
+                        ++buffer_idx;
+                    }
+                    interp_quad1_and_quantize<CompMode, false>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                        data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                    x_upto(begin_idx[1] + math_stride);
+                }
+                else if (n >= 3) {
+                    size_t buffer_idx = 0;
+                    auto cur_ij_offset = offset + i * dim_offsets[0] + dim_offsets[1];
+                    for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                        auto cur_offset =  cur_ij_offset + k;
+                        cur_buffer_2[buffer_idx] = data[cur_offset - stride];
+                        cur_buffer_3[buffer_idx] = data[cur_offset + stride];
+                        ++buffer_idx;
+                    }
+                    interp_linear_and_quantize<CompMode, false>(cur_buffer_2, cur_buffer_3, vector_len,
+                        data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                    x_upto(begin_idx[1] + math_stride);
+                }
+                else if (n >= 1) {
+                    size_t buffer_idx = 0;
+                    auto cur_ij_offset = offset + i * dim_offsets[0] + dim_offsets[1];
+                    for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                        auto cur_offset =  cur_ij_offset + k;
+                        cur_buffer_2[buffer_idx] = data[cur_offset - stride];
+                        ++buffer_idx;
+                    }
+                    interp_equal_and_quantize<CompMode, false>(cur_buffer_2, vector_len,
+                        data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                    x_upto(begin_idx[1] + math_stride);
+                }
+                for(size_t j = begins[1]; j < ends[1]; j += strides[1]){
+                    auto cur_ij_offset = offset + i * dim_offsets[0] + j * dim_offsets[1];
+                    size_t buffer_idx = 0;
+                    auto temp_buffer = cur_buffer_1;
+                    cur_buffer_1 = cur_buffer_2;
+                    cur_buffer_2 = cur_buffer_3;
+                    cur_buffer_3 = cur_buffer_4;
+                    cur_buffer_4 = temp_buffer;
+                    buffer_idx = 0;
+                    for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                        auto cur_offset =  cur_ij_offset + stride3x + k;
+                        cur_buffer_4[buffer_idx++] = data[cur_offset];
+                    }
+                    interp_cubic_and_quantize<CompMode, false>(cur_buffer_1, cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                        data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                    x_upto(begin_idx[1] + j * math_stride);
+                }
+                if (n % 2 == 1) {
+                    if (n > 3) {
+                        auto cur_ij_offset = offset + i * dim_offsets[0] + (n - 2) * dim_offsets[1];
+                        interp_quad2_and_quantize<CompMode, false>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                            data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                        x_upto(begin_idx[1] + (n - 2) * math_stride);
+                    }
+                }
+                else {
+                    if (n > 4) {
+                        auto cur_ij_offset = offset + i * dim_offsets[0] + (n - 3) * dim_offsets[1];
+                        cur_buffer_1 = cur_buffer_2;
+                        cur_buffer_2 = cur_buffer_3;
+                        cur_buffer_3 = cur_buffer_4;
+                        interp_quad2_and_quantize<CompMode, false>(cur_buffer_1, cur_buffer_2, cur_buffer_3, vector_len,
+                            data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                        x_upto(begin_idx[1] + (n - 3) * math_stride);
+                    }
+                }
+                if (n % 2 == 0 && n > 2) {
+                    // edge row j = n-1 of THIS plane (scalar), then its x line via the cursor
+                    const size_t boundary = n - 1;
+                    std::array<size_t, N> eb = begins, ee = ends;
+                    eb[direction] = boundary; ee[direction] = boundary + 1;
+                    eb[0] = i; ee[0] = i + 1;
+                    foreach
+                        <T, N>(data, offset, eb, ee, strides, dim_offsets, [&](T *d) {
+                            if (boundary >= 3) {
+                                if (boundary + 3 < n)
+                                    quantize_point<CompMode, false>(
+                                        d - data, *d,
+                                        interp_cubic(*(d - stride3x), *(d - stride), *(d + stride), *(d + stride3x)));
+                                else if (boundary + 1 < n)
+                                    quantize_point<CompMode, false>(d - data, *d,
+                                                  interp_quad_2(*(d - stride3x), *(d - stride), *(d + stride)));
+                                else
+                                    quantize_point<CompMode, false>(d - data, *d, interp_linear1(*(d - stride3x), *(d - stride)));
+                            } else {
+                                if (boundary + 3 < n)
+                                    quantize_point<CompMode, false>(d - data, *d,
+                                                  interp_quad_1(*(d - stride), *(d + stride), *(d + stride3x)));
+                                else if (boundary + 1 < n)
+                                    quantize_point<CompMode, false>(d - data, *d, interp_linear(*(d - stride), *(d + stride)));
+                                else
+                                    quantize_point<CompMode, false>(d - data, *d, *(d - stride));
+                            }
+                        });
+                    x_upto(begin_idx[1] + boundary * math_stride);
+                }
+                x_upto(end_idx[1]);
+            }
+        }
+        return predict_error;
+    }
+
+    // Row-level fused x+y wavefront within a z-slab (direction 5 only).
+    // Mirrors interpolation_1d_simd_3d_y (begin_idx = the y-pass config), but the x cursor LEADS:
+    // before y interpolates odd row j, every even row its predictors read (j+1 linear, j+3 cubic)
+    // has already been x-interpolated -- x rows are produced right before y consumes them,
+    // cache-hot. dir5 x rows sit on the 2s grid (cursor step = 2*math_stride); odd rows are
+    // filled completely by y itself. Both passes are non-final here (no skip).
+    template <COMPMODE CompMode, class QuantizeFunc>
+    double interpolation_1d_simd_3d_xy(T *data, const std::array<size_t, N> &begin_idx,
+                                       const std::array<size_t, N> &end_idx,
+                                       std::array<size_t, N> &strides, const size_t &math_stride,
+                                       const std::string &interp_func, QuantizeFunc &&quantize_func,
+                                       size_t zi_begin, size_t zi_end,
+                                       size_t x_row_begin, size_t x_col_begin) {
+        constexpr size_t direction = 1;
+        assert(N == 3);
+        for (size_t i = 0; i < N; i++) {
+            if (end_idx[i] < begin_idx[i]) return 0;
+        }
+        size_t math_begin_idx = begin_idx[direction], math_end_idx = end_idx[direction];
+        size_t n = (math_end_idx - math_begin_idx) / math_stride + 1;
+        double predict_error = 0.0;
+        size_t offset = 0;
+        size_t stride = math_stride * original_dim_offsets[direction];
+        std::array<size_t, N> begins, ends, dim_offsets;
+        for (size_t i = 0; i < N; i++) {
+            begins[i] = 0;
+            ends[i] = end_idx[i] - begin_idx[i] + 1;
+            dim_offsets[i] = original_dim_offsets[i];
+            offset += original_dim_offsets[i] * begin_idx[i];
+        }
+        dim_offsets[direction] = stride;
+        if (zi_begin > begins[0]) begins[0] = zi_begin;   /* slab tiling (covers boundary too) */
+        if (zi_end < ends[0]) ends[0] = zi_end;
+
+        const bool x_linear = (interp_func == "linear");
+        const size_t x_n = (end_idx[2] >= x_col_begin) ? (end_idx[2] - x_col_begin) / math_stride + 1 : 0;
+        const size_t x_stride_e = math_stride * original_dim_offsets[2];
+        const size_t x_base = original_dim_offsets[0] * begin_idx[0] + original_dim_offsets[2] * x_col_begin;
+        const size_t x_step = 2 * math_stride;   // dir5 x rows live on the 2s grid
+
+        if (n <= 1) {   // no y targets: still emit the x lines of the slab
+            if (x_n > 1) {
+                for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
+                    for (size_t r = x_row_begin; r <= end_idx[1]; r += x_step) {
+                        size_t xs = x_stride_e;
+                        size_t ro = x_base + i * original_dim_offsets[0] + r * original_dim_offsets[1];
+                        if (x_linear) interp_linear_and_quantize_1D_line<CompMode, false>(data, x_n, xs, ro, quantize_func);
+                        else          interp_cubic_and_quantize_1D_line<CompMode, false>(data, x_n, xs, ro, quantize_func);
+                    }
+                }
+            }
+            return 0;
+        }
+
+        if (interp_func == "linear") {
+            size_t last_linear_stride = 2 * stride;   // y is not the final pass here
+            begins[direction] = 1;
+            ends[direction] = (n >= 1) ? (n - 1) : 0;
+            strides[direction] = 2;
+            size_t vector_len = ends[2] > begins[2] ? (ends[2]-begins[2]-1)/strides[2] + 1 : 0;
+
+            for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
+                size_t next_x = x_row_begin;
+                auto x_upto = [&](size_t r_last) {
+                    if (x_n <= 1) return;
+                    for (; next_x <= r_last && next_x <= end_idx[1]; next_x += x_step) {
+                        size_t xs = x_stride_e;
+                        size_t ro = x_base + i * original_dim_offsets[0] + next_x * original_dim_offsets[1];
+                        if (x_linear) interp_linear_and_quantize_1D_line<CompMode, false>(data, x_n, xs, ro, quantize_func);
+                        else          interp_cubic_and_quantize_1D_line<CompMode, false>(data, x_n, xs, ro, quantize_func);
+                    }
+                };
+                auto cur_buffer_1 = interp_buffer_1;
+                auto cur_buffer_2 = interp_buffer_2;
+                for(size_t j = begins[1]; j < ends[1]; j += strides[1]){
+                    x_upto(begin_idx[1] + (j + 1) * math_stride);   // y reads even rows j-1, j+1
+                    auto cur_ij_offset = offset + i * dim_offsets[0] + j * dim_offsets[1];
+                    size_t buffer_idx = 0;
+                    if( j == begins[1]) {
+                        for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                            auto cur_offset =  cur_ij_offset + k;
+                            cur_buffer_1[buffer_idx] = data[cur_offset - stride];
+                            cur_buffer_2[buffer_idx] = data[cur_offset + stride];
+                            ++buffer_idx;
+                        }
+                    }
+                    else{
+                        auto temp_buffer = cur_buffer_1;
+                        cur_buffer_1 = cur_buffer_2;
+                        cur_buffer_2 = temp_buffer;
+                        buffer_idx = 0;
+                        for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                            auto cur_offset =  cur_ij_offset + stride + k;
+                            cur_buffer_2[buffer_idx++] = data[cur_offset];
+                        }
+                    }
+                    interp_linear_and_quantize<CompMode, false>(cur_buffer_1, cur_buffer_2, vector_len,
+                        data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                }
+                if (n % 2 == 0) {
+                    auto cur_ij_offset = offset + i * dim_offsets[0] + (n - 1) * dim_offsets[1];
+                    if(n < 3) {
+                        size_t buffer_idx = 0;
+                        for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                            cur_buffer_2[buffer_idx++] = data[cur_ij_offset - stride + k];
+                        }
+                        interp_equal_and_quantize<CompMode, false>(cur_buffer_2, vector_len,
+                        data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                    }
+                    else {
+                        size_t buffer_idx = 0;
+                        for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                            auto cur_offset =  cur_ij_offset - last_linear_stride + k;
+                            cur_buffer_1[buffer_idx++] = data[cur_offset];
+                        }
+                        interp_linear1_and_quantize<CompMode, false>(cur_buffer_1, cur_buffer_2, vector_len,
+                        data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                    }
+                }
+                x_upto(end_idx[1]);
+            }
+        } else {
+            size_t stride3x = 3 * stride;
+            begins[direction] = 3;
+            ends[direction] = (n >= 3) ? (n - 3) : 0;
+            strides[direction] = 2;
+            size_t vector_len = ends[2] > begins[2] ? (ends[2]-begins[2]-1)/strides[2] + 1 : 0;
+
+            for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
+                size_t next_x = x_row_begin;
+                auto x_upto = [&](size_t r_last) {
+                    if (x_n <= 1) return;
+                    for (; next_x <= r_last && next_x <= end_idx[1]; next_x += x_step) {
+                        size_t xs = x_stride_e;
+                        size_t ro = x_base + i * original_dim_offsets[0] + next_x * original_dim_offsets[1];
+                        if (x_linear) interp_linear_and_quantize_1D_line<CompMode, false>(data, x_n, xs, ro, quantize_func);
+                        else          interp_cubic_and_quantize_1D_line<CompMode, false>(data, x_n, xs, ro, quantize_func);
+                    }
+                };
+                auto cur_buffer_1 = interp_buffer_1;
+                auto cur_buffer_2 = interp_buffer_2;
+                auto cur_buffer_3 = interp_buffer_3;
+                auto cur_buffer_4 = interp_buffer_4;
+                if (n >= 5) {
+                    x_upto(begin_idx[1] + 4 * math_stride);   // quad1 reads rows 0,2,4
+                    size_t buffer_idx = 0;
+                    auto cur_ij_offset = offset + i * dim_offsets[0] + dim_offsets[1];
+                    for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                        auto cur_offset =  cur_ij_offset + k;
+                        cur_buffer_2[buffer_idx] = data[cur_offset - stride];
+                        cur_buffer_3[buffer_idx] = data[cur_offset + stride];
+                        cur_buffer_4[buffer_idx] = data[cur_offset + stride3x];
+                        ++buffer_idx;
+                    }
+                    interp_quad1_and_quantize<CompMode, false>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                        data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                }
+                else if (n >= 3) {
+                    x_upto(begin_idx[1] + 2 * math_stride);
+                    size_t buffer_idx = 0;
+                    auto cur_ij_offset = offset + i * dim_offsets[0] + dim_offsets[1];
+                    for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                        auto cur_offset =  cur_ij_offset + k;
+                        cur_buffer_2[buffer_idx] = data[cur_offset - stride];
+                        cur_buffer_3[buffer_idx] = data[cur_offset + stride];
+                        ++buffer_idx;
+                    }
+                    interp_linear_and_quantize<CompMode, false>(cur_buffer_2, cur_buffer_3, vector_len,
+                        data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                }
+                else if (n >= 1) {
+                    x_upto(begin_idx[1]);
+                    size_t buffer_idx = 0;
+                    auto cur_ij_offset = offset + i * dim_offsets[0] + dim_offsets[1];
+                    for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                        auto cur_offset =  cur_ij_offset + k;
+                        cur_buffer_2[buffer_idx] = data[cur_offset - stride];
+                        ++buffer_idx;
+                    }
+                    interp_equal_and_quantize<CompMode, false>(cur_buffer_2, vector_len,
+                        data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                }
+                for(size_t j = begins[1]; j < ends[1]; j += strides[1]){
+                    x_upto(begin_idx[1] + (j + 3) * math_stride);   // cubic y reads even rows j-3..j+3
+                    auto cur_ij_offset = offset + i * dim_offsets[0] + j * dim_offsets[1];
+                    size_t buffer_idx = 0;
+                    auto temp_buffer = cur_buffer_1;
+                    cur_buffer_1 = cur_buffer_2;
+                    cur_buffer_2 = cur_buffer_3;
+                    cur_buffer_3 = cur_buffer_4;
+                    cur_buffer_4 = temp_buffer;
+                    buffer_idx = 0;
+                    for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                        auto cur_offset =  cur_ij_offset + stride3x + k;
+                        cur_buffer_4[buffer_idx++] = data[cur_offset];
+                    }
+                    interp_cubic_and_quantize<CompMode, false>(cur_buffer_1, cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                        data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                }
+                if (n % 2 == 1) {
+                    if (n > 3) {
+                        x_upto(begin_idx[1] + (n - 1) * math_stride);   // quad2 reads n-5, n-3, n-1
+                        auto cur_ij_offset = offset + i * dim_offsets[0] + (n - 2) * dim_offsets[1];
+                        interp_quad2_and_quantize<CompMode, false>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                            data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                    }
+                }
+                else {
+                    if (n > 4) {
+                        x_upto(begin_idx[1] + (n - 2) * math_stride);   // quad2 reads n-6, n-4, n-2
+                        auto cur_ij_offset = offset + i * dim_offsets[0] + (n - 3) * dim_offsets[1];
+                        cur_buffer_1 = cur_buffer_2;
+                        cur_buffer_2 = cur_buffer_3;
+                        cur_buffer_3 = cur_buffer_4;
+                        interp_quad2_and_quantize<CompMode, false>(cur_buffer_1, cur_buffer_2, cur_buffer_3, vector_len,
+                            data + cur_ij_offset, strides[2], cur_ij_offset, quantize_func);
+                    }
+                }
+                if (n % 2 == 0 && n > 2) {
+                    const size_t boundary = n - 1;
+                    x_upto(begin_idx[1] + (n - 2) * math_stride);   // edge reads n-4, n-2
+                    std::array<size_t, N> eb = begins, ee = ends;
+                    eb[direction] = boundary; ee[direction] = boundary + 1;
+                    eb[0] = i; ee[0] = i + 1;
+                    foreach
+                        <T, N>(data, offset, eb, ee, strides, dim_offsets, [&](T *d) {
+                            if (boundary >= 3) {
+                                if (boundary + 3 < n)
+                                    quantize_point<CompMode, false>(
+                                        d - data, *d,
+                                        interp_cubic(*(d - stride3x), *(d - stride), *(d + stride), *(d + stride3x)));
+                                else if (boundary + 1 < n)
+                                    quantize_point<CompMode, false>(d - data, *d,
+                                                  interp_quad_2(*(d - stride3x), *(d - stride), *(d + stride)));
+                                else
+                                    quantize_point<CompMode, false>(d - data, *d, interp_linear1(*(d - stride3x), *(d - stride)));
+                            } else {
+                                if (boundary + 3 < n)
+                                    quantize_point<CompMode, false>(d - data, *d,
+                                                  interp_quad_1(*(d - stride), *(d + stride), *(d + stride3x)));
+                                else if (boundary + 1 < n)
+                                    quantize_point<CompMode, false>(d - data, *d, interp_linear(*(d - stride), *(d + stride)));
+                                else
+                                    quantize_point<CompMode, false>(d - data, *d, *(d - stride));
+                            }
+                        });
+                }
+                x_upto(end_idx[1]);
+            }
+        }
+        return predict_error;
+    }
+
+    // Row-level fused y+x for the 2D dir0 case (dim0 pass leads, dim1 x lines lag). Mirrors
+    // interpolation_1d_simd_2d_y (dim0 buffer pass, never skips) with the dim1 x lines emitted
+    // cache-hot right after each dim0 row is final. SkipX applies to the x lines (the final pass).
+    template <COMPMODE CompMode, bool SkipX = false, class QuantizeFunc>
+    double interpolation_1d_simd_2d_yx(T *data, const std::array<size_t, N> &begin_idx,
+                                       const std::array<size_t, N> &end_idx, std::array<size_t, N> &strides,
+                                       const size_t &math_stride, const std::string &interp_func,
+                                       QuantizeFunc &&quantize_func, size_t x_row_begin, size_t x_col_begin) {
+        constexpr size_t direction = 0;
+        assert(N == 2);
+        for (size_t i = 0; i < N; ++i) if (end_idx[i] < begin_idx[i]) return 0;
+        size_t n = (end_idx[direction] - begin_idx[direction]) / math_stride + 1;
+        double predict_error = 0.0;
+        size_t offset = 0;
+        size_t stride = math_stride * original_dim_offsets[direction];
+        std::array<size_t, N> begins, ends, dim_offsets;
+        for (size_t i = 0; i < N; i++) {
+            begins[i] = 0; ends[i] = end_idx[i] - begin_idx[i] + 1;
+            dim_offsets[i] = original_dim_offsets[i]; offset += original_dim_offsets[i] * begin_idx[i];
+        }
+        dim_offsets[direction] = stride;
+        const bool x_linear = (interp_func == "linear");
+        const size_t x_n = (end_idx[1] >= x_col_begin) ? (end_idx[1] - x_col_begin) / math_stride + 1 : 0;
+        const size_t x_stride_e = math_stride * original_dim_offsets[1];
+        const size_t x_base = original_dim_offsets[1] * x_col_begin;
+        size_t next_x = x_row_begin;
+        auto x_upto = [&](size_t r_last) {   // dim1 x lines for every dim0 row <= r_last
+            if (x_n <= 1) return;
+            for (; next_x <= r_last && next_x <= end_idx[0]; next_x += math_stride) {
+                size_t xs = x_stride_e;
+                size_t ro = x_base + next_x * original_dim_offsets[0];
+                if (x_linear) interp_linear_and_quantize_1D_line<CompMode, SkipX>(data, x_n, xs, ro, quantize_func);
+                else          interp_cubic_and_quantize_1D_line<CompMode, SkipX>(data, x_n, xs, ro, quantize_func);
+            }
+        };
+        if (n <= 1) { x_upto(end_idx[0]); return predict_error; }
+        size_t last_linear_stride = 2 * stride;   // dim0 pass is not final here -> never skips
+        if (interp_func == "linear") {
+            begins[direction] = 1; ends[direction] = (n >= 1) ? (n - 1) : 0; strides[direction] = 2;
+            size_t vector_len = ends[1] > begins[1] ? (ends[1]-begins[1]-1)/strides[1] + 1 : 0;
+            auto cur_buffer_1 = interp_buffer_1;
+            auto cur_buffer_2 = interp_buffer_2;
+            size_t buffer_idx = 0;
+            if (begins[0] < ends[0]) {
+                auto cur_ij_offset = offset + dim_offsets[0];
+                for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                    auto cur_offset = cur_ij_offset + k;
+                    cur_buffer_1[buffer_idx] = data[cur_offset - stride];
+                    cur_buffer_2[buffer_idx] = data[cur_offset + stride];
+                    ++buffer_idx;
+                }
+                interp_linear_and_quantize<CompMode, false>(cur_buffer_1, cur_buffer_2, vector_len,
+                    data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+                x_upto(begin_idx[0] + math_stride);
+            }
+            for (size_t i = begins[0] + strides[0]; i < ends[0]; i += strides[0]) {
+                auto cur_ij_offset = offset + i * dim_offsets[0];
+                auto temp_buffer = cur_buffer_1; cur_buffer_1 = cur_buffer_2; cur_buffer_2 = temp_buffer;
+                buffer_idx = 0;
+                for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                    auto cur_offset = cur_ij_offset + stride + k;
+                    cur_buffer_2[buffer_idx++] = data[cur_offset];
+                }
+                interp_linear_and_quantize<CompMode, false>(cur_buffer_1, cur_buffer_2, vector_len,
+                    data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+                x_upto(begin_idx[0] + i * math_stride);
+            }
+            if (n % 2 == 0) {
+                auto cur_ij_offset = offset + (n - 1) * dim_offsets[0];
+                if (n < 3) {
+                    buffer_idx = 0;
+                    auto cb2 = interp_buffer_2;
+                    for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                        auto cur_offset = cur_ij_offset + k;
+                        cb2[buffer_idx] = data[cur_offset - stride];
+                        ++buffer_idx;
+                    }
+                    interp_equal_and_quantize<CompMode, false>(cb2, vector_len,
+                        data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+                } else {
+                    buffer_idx = 0;
+                    for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                        auto cur_offset = cur_ij_offset + k - last_linear_stride;
+                        cur_buffer_1[buffer_idx] = data[cur_offset];
+                        ++buffer_idx;
+                    }
+                    interp_linear1_and_quantize<CompMode, false>(cur_buffer_1, cur_buffer_2, vector_len,
+                        data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+                }
+                x_upto(begin_idx[0] + (n - 1) * math_stride);
+            }
+            x_upto(end_idx[0]);
+        } else {
+            size_t stride3x = 3 * stride;
+            begins[direction] = 3; ends[direction] = (n >= 3) ? (n - 3) : 0; strides[direction] = 2;
+            size_t vector_len = ends[1] > begins[1] ? (ends[1]-begins[1]-1)/strides[1] + 1 : 0;
+            auto cur_buffer_1 = interp_buffer_1;
+            auto cur_buffer_2 = interp_buffer_2;
+            auto cur_buffer_3 = interp_buffer_3;
+            auto cur_buffer_4 = interp_buffer_4;
+            size_t buffer_idx = 0;
+            auto cur_ij_offset = offset + dim_offsets[0];
+            if (n >= 5) {
+                for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                    auto cur_offset = cur_ij_offset + k;
+                    cur_buffer_2[buffer_idx] = data[cur_offset - stride];
+                    cur_buffer_3[buffer_idx] = data[cur_offset + stride];
+                    cur_buffer_4[buffer_idx] = data[cur_offset + stride3x];
+                    ++buffer_idx;
+                }
+                interp_quad1_and_quantize<CompMode, false>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                    data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+            } else if (n >= 3) {
+                for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                    auto cur_offset = cur_ij_offset + k;
+                    cur_buffer_3[buffer_idx] = data[cur_offset - stride];
+                    cur_buffer_4[buffer_idx] = data[cur_offset + stride];
+                    ++buffer_idx;
+                }
+                interp_linear_and_quantize<CompMode, false>(cur_buffer_3, cur_buffer_4, vector_len,
+                    data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+            } else if (n >= 1) {
+                for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                    auto cur_offset = cur_ij_offset + k;
+                    cur_buffer_2[buffer_idx] = data[cur_offset - stride];
+                    ++buffer_idx;
+                }
+                interp_equal_and_quantize<CompMode, false>(cur_buffer_2, vector_len,
+                    data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+            }
+            x_upto(begin_idx[0] + math_stride);
+            for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
+                auto temp_buffer = cur_buffer_1;
+                cur_buffer_1 = cur_buffer_2; cur_buffer_2 = cur_buffer_3; cur_buffer_3 = cur_buffer_4; cur_buffer_4 = temp_buffer;
+                buffer_idx = 0;
+                cur_ij_offset = offset + i * dim_offsets[0];
+                for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                    auto cur_offset = cur_ij_offset + stride3x + k;
+                    cur_buffer_4[buffer_idx++] = data[cur_offset];
+                }
+                interp_cubic_and_quantize<CompMode, false>(cur_buffer_1, cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                    data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+                x_upto(begin_idx[0] + i * math_stride);
+            }
+            if (n % 2 == 1) {
+                if (n > 3) {
+                    cur_ij_offset = offset + (n - 2) * dim_offsets[0];
+                    interp_quad2_and_quantize<CompMode, false>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                        data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+                    x_upto(begin_idx[0] + (n - 2) * math_stride);
+                }
+            } else {
+                if (n > 4) {
+                    cur_ij_offset = offset + (n - 3) * dim_offsets[0];
+                    interp_quad2_and_quantize<CompMode, false>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                        data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+                    x_upto(begin_idx[0] + (n - 3) * math_stride);
+                }
+                if (n > 2) {
+                    cur_ij_offset = offset + (n - 1) * dim_offsets[0];
+                    interp_linear1_and_quantize<CompMode, false>(cur_buffer_3, cur_buffer_4, vector_len,
+                        data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+                    x_upto(begin_idx[0] + (n - 1) * math_stride);
+                }
+            }
+            x_upto(end_idx[0]);
+        }
+        return predict_error;
+    }
+
+    // Row-level fused x+y for the 2D else case (dim1 x lines lead, dim0 pass lags and is final).
+    // Mirrors interpolation_1d_simd_2d_y (dim0 buffer pass, which SKIPS since it is the final pass)
+    // but each even-dim0 row's dim1 x line is produced just before the dim0 pass reads it. x lines
+    // sit on the 2s grid (cursor step 2*math_stride) and never skip.
+    template <COMPMODE CompMode, bool SkipOverwrite = false, class QuantizeFunc>
+    double interpolation_1d_simd_2d_xy(T *data, const std::array<size_t, N> &begin_idx,
+                                       const std::array<size_t, N> &end_idx, std::array<size_t, N> &strides,
+                                       const size_t &math_stride, const std::string &interp_func,
+                                       QuantizeFunc &&quantize_func, size_t x_row_begin, size_t x_col_begin) {
+        constexpr size_t direction = 0;
+        assert(N == 2);
+        for (size_t i = 0; i < N; ++i) if (end_idx[i] < begin_idx[i]) return 0;
+        size_t n = (end_idx[direction] - begin_idx[direction]) / math_stride + 1;
+        double predict_error = 0.0;
+        size_t offset = 0;
+        size_t stride = math_stride * original_dim_offsets[direction];
+        std::array<size_t, N> begins, ends, dim_offsets;
+        for (size_t i = 0; i < N; i++) {
+            begins[i] = 0; ends[i] = end_idx[i] - begin_idx[i] + 1;
+            dim_offsets[i] = original_dim_offsets[i]; offset += original_dim_offsets[i] * begin_idx[i];
+        }
+        dim_offsets[direction] = stride;
+        const bool x_linear = (interp_func == "linear");
+        const size_t x_n = (end_idx[1] >= x_col_begin) ? (end_idx[1] - x_col_begin) / math_stride + 1 : 0;
+        const size_t x_stride_e = math_stride * original_dim_offsets[1];
+        const size_t x_base = original_dim_offsets[1] * x_col_begin;
+        const size_t x_step = 2 * math_stride;   // dim1 x lines live on even dim0 rows
+        size_t next_x = x_row_begin;
+        auto x_upto = [&](size_t r_last) {   // dim1 x lines for even dim0 rows <= r_last (produced ahead of the dim0 pass)
+            if (x_n <= 1) return;
+            for (; next_x <= r_last && next_x <= end_idx[0]; next_x += x_step) {
+                size_t xs = x_stride_e;
+                size_t ro = x_base + next_x * original_dim_offsets[0];
+                if (x_linear) interp_linear_and_quantize_1D_line<CompMode, false>(data, x_n, xs, ro, quantize_func);
+                else          interp_cubic_and_quantize_1D_line<CompMode, false>(data, x_n, xs, ro, quantize_func);
+            }
+        };
+        if (n <= 1) { x_upto(end_idx[0]); return predict_error; }
+        size_t last_linear_stride = SkipOverwrite ? 3 * stride : 2 * stride;   // dim0 pass is final -> skips
+        if (interp_func == "linear") {
+            begins[direction] = 1; ends[direction] = (n >= 1) ? (n - 1) : 0; strides[direction] = 2;
+            size_t vector_len = ends[1] > begins[1] ? (ends[1]-begins[1]-1)/strides[1] + 1 : 0;
+            auto cur_buffer_1 = interp_buffer_1;
+            auto cur_buffer_2 = interp_buffer_2;
+            size_t buffer_idx = 0;
+            if (begins[0] < ends[0]) {
+                x_upto(begin_idx[0] + 2 * math_stride);   // dim0 row 1 reads even rows 0, 2
+                auto cur_ij_offset = offset + dim_offsets[0];
+                for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                    auto cur_offset = cur_ij_offset + k;
+                    cur_buffer_1[buffer_idx] = data[cur_offset - stride];
+                    cur_buffer_2[buffer_idx] = data[cur_offset + stride];
+                    ++buffer_idx;
+                }
+                interp_linear_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, vector_len,
+                    data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+            }
+            for (size_t i = begins[0] + strides[0]; i < ends[0]; i += strides[0]) {
+                x_upto(begin_idx[0] + (i + 1) * math_stride);
+                auto cur_ij_offset = offset + i * dim_offsets[0];
+                auto temp_buffer = cur_buffer_1; cur_buffer_1 = cur_buffer_2; cur_buffer_2 = temp_buffer;
+                buffer_idx = 0;
+                for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                    auto cur_offset = cur_ij_offset + stride + k;
+                    cur_buffer_2[buffer_idx++] = data[cur_offset];
+                }
+                interp_linear_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, vector_len,
+                    data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+            }
+            if (n % 2 == 0) {
+                x_upto(begin_idx[0] + (n - 1) * math_stride);
+                auto cur_ij_offset = offset + (n - 1) * dim_offsets[0];
+                if (n < 3) {
+                    buffer_idx = 0;
+                    auto cb2 = interp_buffer_2;
+                    for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                        auto cur_offset = cur_ij_offset + k;
+                        cb2[buffer_idx] = data[cur_offset - stride];
+                        ++buffer_idx;
+                    }
+                    interp_equal_and_quantize<CompMode, SkipOverwrite>(cb2, vector_len,
+                        data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+                } else {
+                    buffer_idx = 0;
+                    for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                        auto cur_offset = cur_ij_offset + k - last_linear_stride;
+                        cur_buffer_1[buffer_idx] = data[cur_offset];
+                        ++buffer_idx;
+                    }
+                    interp_linear1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, vector_len,
+                        data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+                }
+            }
+            x_upto(end_idx[0]);
+        } else {
+            size_t stride3x = 3 * stride;
+            begins[direction] = 3; ends[direction] = (n >= 3) ? (n - 3) : 0; strides[direction] = 2;
+            size_t vector_len = ends[1] > begins[1] ? (ends[1]-begins[1]-1)/strides[1] + 1 : 0;
+            auto cur_buffer_1 = interp_buffer_1;
+            auto cur_buffer_2 = interp_buffer_2;
+            auto cur_buffer_3 = interp_buffer_3;
+            auto cur_buffer_4 = interp_buffer_4;
+            size_t buffer_idx = 0;
+            auto cur_ij_offset = offset + dim_offsets[0];
+            if (n >= 5) {
+                x_upto(begin_idx[0] + 4 * math_stride);   // dim0 row 1 reads even rows 0,2,4
+                for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                    auto cur_offset = cur_ij_offset + k;
+                    cur_buffer_2[buffer_idx] = data[cur_offset - stride];
+                    cur_buffer_3[buffer_idx] = data[cur_offset + stride];
+                    cur_buffer_4[buffer_idx] = data[cur_offset + stride3x];
+                    ++buffer_idx;
+                }
+                interp_quad1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                    data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+            } else if (n >= 3) {
+                x_upto(begin_idx[0] + 2 * math_stride);
+                for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                    auto cur_offset = cur_ij_offset + k;
+                    cur_buffer_3[buffer_idx] = data[cur_offset - stride];
+                    cur_buffer_4[buffer_idx] = data[cur_offset + stride];
+                    ++buffer_idx;
+                }
+                interp_linear_and_quantize<CompMode, SkipOverwrite>(cur_buffer_3, cur_buffer_4, vector_len,
+                    data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+            } else if (n >= 1) {
+                x_upto(begin_idx[0]);
+                for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                    auto cur_offset = cur_ij_offset + k;
+                    cur_buffer_2[buffer_idx] = data[cur_offset - stride];
+                    ++buffer_idx;
+                }
+                interp_equal_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, vector_len,
+                    data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+            }
+            for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
+                x_upto(begin_idx[0] + (i + 3) * math_stride);   // cubic dim0 row reads even rows i-3..i+3
+                auto temp_buffer = cur_buffer_1;
+                cur_buffer_1 = cur_buffer_2; cur_buffer_2 = cur_buffer_3; cur_buffer_3 = cur_buffer_4; cur_buffer_4 = temp_buffer;
+                buffer_idx = 0;
+                cur_ij_offset = offset + i * dim_offsets[0];
+                for (size_t k = begins[1]; k < ends[1]; k += strides[1]) {
+                    auto cur_offset = cur_ij_offset + stride3x + k;
+                    cur_buffer_4[buffer_idx++] = data[cur_offset];
+                }
+                interp_cubic_and_quantize<CompMode, SkipOverwrite>(cur_buffer_1, cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                    data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+            }
+            if (n % 2 == 1) {
+                if (n > 3) {
+                    x_upto(begin_idx[0] + (n - 1) * math_stride);
+                    cur_ij_offset = offset + (n - 2) * dim_offsets[0];
+                    interp_quad2_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                        data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+                }
+            } else {
+                if (n > 4) {
+                    x_upto(begin_idx[0] + (n - 2) * math_stride);
+                    cur_ij_offset = offset + (n - 3) * dim_offsets[0];
+                    interp_quad2_and_quantize<CompMode, SkipOverwrite>(cur_buffer_2, cur_buffer_3, cur_buffer_4, vector_len,
+                        data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+                }
+                if (n > 2) {
+                    x_upto(begin_idx[0] + (n - 1) * math_stride);
+                    cur_ij_offset = offset + (n - 1) * dim_offsets[0];
+                    interp_linear1_and_quantize<CompMode, SkipOverwrite>(cur_buffer_3, cur_buffer_4, vector_len,
+                        data + cur_ij_offset, strides[1], cur_ij_offset, quantize_func);
+                }
+            }
+            x_upto(end_idx[0]);
+        }
+        return predict_error;
+    }
+
     template <COMPMODE CompMode, bool SkipOverwrite = false, class QuantizeFunc>
     double interpolation_1d_simd(T *data, size_t begin, size_t end, size_t math_stride,
                                  const std::string &interp_func, QuantizeFunc &&quantize_func) {
@@ -1361,20 +2323,35 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
                     strides[dims[i]] = stride2x;
                 }
                 if(direction == 0 ){//xy
-                    predict_error += interpolation_1d_simd_2d_y<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
-                    // std::cout << "after x direction" << std::endl;
-                    begin_idx[1] = begin[1];
-                    begin_idx[0] = (begin[0] ? begin[0] + stride : 0);
-                    strides[0] = stride;
-                    predict_error += interpolation_1d_simd_2d_x<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    // constexpr bool _fuse_line2d = true;   // row-level dim0<->dim1 fusion for the 2D plane
+                    // if (_fuse_line2d) {
+                    //     std::array<size_t, N> sy = strides;   // callee mutates strides
+                    //     predict_error += interpolation_1d_simd_2d_yx<CompMode, SkipOverwrite>(
+                    //         data, begin_idx, end_idx, sy, stride, interp_func, quantize_func,
+                    //         (begin[0] ? begin[0] + stride : 0), begin[1]);
+                    // } else {
+                        predict_error += interpolation_1d_simd_2d_y<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                        begin_idx[1] = begin[1];
+                        begin_idx[0] = (begin[0] ? begin[0] + stride : 0);
+                        strides[0] = stride;
+                        predict_error += interpolation_1d_simd_2d_x<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    // }
                 }
                 else {
-                    predict_error += interpolation_1d_simd_2d_x<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
-                    // std::cout << "after x direction" << std::endl;
-                    begin_idx[0] = begin[0];
-                    begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
-                    strides[1] = stride;
-                    predict_error += interpolation_1d_simd_2d_y<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    // constexpr bool _fuse_line2d = true;
+                    // if (_fuse_line2d) {
+                    //     std::array<size_t, N> by = begin_idx, sy = strides;   // dim0 (y) pass config
+                    //     by[0] = begin[0]; by[1] = (begin[1] ? begin[1] + stride : 0); sy[1] = stride;
+                    //     predict_error += interpolation_1d_simd_2d_xy<CompMode, SkipOverwrite>(
+                    //         data, by, end_idx, sy, stride, interp_func, quantize_func,
+                    //         (begin[0] ? begin[0] + stride2x : 0), begin[1]);
+                    // } else {
+                        predict_error += interpolation_1d_simd_2d_x<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                        begin_idx[0] = begin[0];
+                        begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
+                        strides[1] = stride;
+                        predict_error += interpolation_1d_simd_2d_y<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    // }
                 }
             }
             else {
@@ -1408,14 +2385,19 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
             }
 
             if constexpr (Tuning == TUNING::DISABLED && N == 3 && !std::is_integral_v<T>) {//avx &&stride<=2
-                constexpr bool _fuse_xy = true;      // x+y cache fusion, always on (set false to use the old path below)
+                constexpr bool _fuse = true;      // x+y cache fusion, always on (set false to use the old path below)
                 constexpr size_t _fuse_tile = 1;     // z-slab thickness (planes); 1 is optimal
                 if(direction ==0 ){//xyz
-                    predict_error += interpolation_1d_simd_3d_z<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                    // constexpr bool _fuse_xyz = true;   // OFF: z done as a separate pass; keep only xy-line fusion
+                    std::array<size_t, N> bz = begin_idx, sz0 = strides;   // z-pass config (kept before the y mutations)
+
+                    if (_fuse == false || stride !=1 ) {
+                        predict_error += interpolation_1d_simd_3d_z<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                    }
                     begin_idx[1] = begin[1];
                     begin_idx[0] = (begin[0] ? begin[0] + stride : 0);
                     strides[0] = stride;
-                    if (_fuse_xy) {
+                    if constexpr (_fuse) {
                         // fuse y & x: both loop dim0(z) outer, no cross-plane dep -> tile the z-loop so each
                         // z-slab stays cached across both passes.
                         std::array<size_t, N> by = begin_idx, sy = strides;               // y-config
@@ -1423,10 +2405,22 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
                         bx[2] = begin[2]; bx[1] = (begin[1] ? begin[1] + stride : 0); sx[1] = stride;
                         size_t z_ext = end_idx[0] - by[0] + 1;
                         size_t tile_w = _fuse_tile * stride;
+                        // constexpr bool _fuse_line = true;   // row-level y<->x wavefront inside the slab
                         for (size_t zi = 0; zi < z_ext; zi += tile_w) {
+                            if (_fuse == true && stride == 1) {
+                                size_t gi = (by[0] + zi) - bz[0];
+                                if ((gi & 1) != 0) {
+                                    std::array<size_t, N> sz2 = sz0;
+                                    predict_error += interpolation_1d_simd_3d_z<CompMode, false>(data, bz, end_idx, dims[0], sz2, stride, interp_func, quantize_func, gi, gi + 2);
+                                }
+                            }
                             std::array<size_t, N> sy2 = sy, sx2 = sx;   // fresh copies (callees mutate strides)
-                            predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, by, end_idx, dims[1], sy2, stride, interp_func, quantize_func, zi, zi + tile_w);
-                            predict_error += interpolation_1d_simd_3d_x<CompMode, SkipOverwrite>(data, bx, end_idx, dims[2], sx2, stride, interp_func, quantize_func, zi, zi + tile_w);
+                            // if (_fuse_line) {
+                                predict_error += interpolation_1d_simd_3d_yx<CompMode, SkipOverwrite>(data, by, end_idx, sy2, stride, interp_func, quantize_func, zi, zi + tile_w, bx[1], bx[2]);
+                            // } else {
+                            //     predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, by, end_idx, dims[1], sy2, stride, interp_func, quantize_func, zi, zi + tile_w);
+                            //     predict_error += interpolation_1d_simd_3d_x<CompMode, SkipOverwrite>(data, bx, end_idx, dims[2], sx2, stride, interp_func, quantize_func, zi, zi + tile_w);
+                            // }
                         }
                     } else {
                         predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
@@ -1437,16 +2431,39 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
                     }
                 }
                 else{//zyx
-                    if (_fuse_xy) {
+                    // z-pass config (explicit; z is the FINAL pass here and reads fully xy-processed planes)
+                    std::array<size_t, N> bz5;
+                    bz5[0] = begin[0];
+                    bz5[1] = (begin[1] ? begin[1] + stride : 0);
+                    bz5[2] = (begin[2] ? begin[2] + stride : 0);
+                    std::array<size_t, N> sz5 = strides; sz5[1] = stride; sz5[2] = stride;
+                    const size_t zn = (end_idx[0] >= bz5[0]) ? (end_idx[0] - bz5[0]) / stride + 1 : 0;
+                    size_t zgi = 1;   // next pending z window (z targets sit on odd grid indices)
+                    if constexpr (_fuse) {
                         std::array<size_t, N> bx = begin_idx, sx = strides;               // x-config (initial state)
                         std::array<size_t, N> by = bx, sy = sx;                            // y-config (derived)
                         by[1] = begin[1]; by[2] = (begin[2] ? begin[2] + stride : 0); sy[2] = stride;
                         size_t z_ext = end_idx[0] - bx[0] + 1;
                         size_t tile_w = _fuse_tile * sx[0];
+                        // constexpr bool _fuse_line = true;   // row-level x->y wavefront inside the slab
                         for (size_t zi = 0; zi < z_ext; zi += tile_w) {
                             std::array<size_t, N> sx2 = sx, sy2 = sy;
-                            predict_error += interpolation_1d_simd_3d_x<CompMode, false>(data, bx, end_idx, dims[0], sx2, stride, interp_func, quantize_func, zi, zi + tile_w);
-                            predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, by, end_idx, dims[1], sy2, stride, interp_func, quantize_func, zi, zi + tile_w);
+                            // if constexpr (_fuse_line) {
+                                predict_error += interpolation_1d_simd_3d_xy<CompMode>(data, by, end_idx, sy2, stride, interp_func, quantize_func, zi, zi + tile_w, bx[1], bx[2]);
+                            // } else {
+                            //     predict_error += interpolation_1d_simd_3d_x<CompMode, false>(data, bx, end_idx, dims[0], sx2, stride, interp_func, quantize_func, zi, zi + tile_w);
+                            //     predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, by, end_idx, dims[1], sy2, stride, interp_func, quantize_func, zi, zi + tile_w);
+                            // }
+                            if (_fuse == true && stride == 1 && zn >= 2) {
+                                // z-interp every odd plane whose furthest forward predictor (gi+3, and the
+                                // quad1 first plane also reads +3) is now fully xy-processed.
+                                size_t ze = bx[0] + zi;                      // newest xy-complete plane (element)
+                                while (zgi + 1 <= zn - 1 && bz5[0] + (zgi + 3) * stride <= ze) {
+                                    std::array<size_t, N> sz2 = sz5;
+                                    predict_error += interpolation_1d_simd_3d_z<CompMode, SkipOverwrite>(data, bz5, end_idx, dims[2], sz2, stride, interp_func, quantize_func, zgi, zgi + 2);
+                                    zgi += 2;
+                                }
+                            }
                         }
                     } else {
                         predict_error += interpolation_1d_simd_3d_x<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
@@ -1455,13 +2472,24 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
                         strides[2] = stride;
                         predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
                     }
-                    // z-pass (last, separate); explicit z-config correct for both branches
-                    begin_idx[0] = begin[0];
-                    begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
-                    begin_idx[2] = (begin[2] ? begin[2] + stride : 0);
-                    strides[1] = stride;
-                    strides[2] = stride;
-                    predict_error += interpolation_1d_simd_3d_z<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
+                    if (_fuse == true && stride == 1) {
+                        // drain: remaining odd planes (their windows include the quad2/edge formulas,
+                        // which only read backward or +1 -- all xy-complete by now)
+                        if (zn >= 2) {
+                            for (; zgi <= zn - 1; zgi += 2) {
+                                std::array<size_t, N> sz2 = sz5;
+                                predict_error += interpolation_1d_simd_3d_z<CompMode, SkipOverwrite>(data, bz5, end_idx, dims[2], sz2, stride, interp_func, quantize_func, zgi, zgi + 2);
+                            }
+                        }
+                    } else {
+                        // z-pass (last, separate); explicit z-config correct for both branches
+                        begin_idx[0] = begin[0];
+                        begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
+                        begin_idx[2] = (begin[2] ? begin[2] + stride : 0);
+                        strides[1] = stride;
+                        strides[2] = stride;
+                        predict_error += interpolation_1d_simd_3d_z<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
+                    }
                 }
             }
             else{
@@ -1507,6 +2535,9 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
     static constexpr size_t AVX_256_parallelism = 32 / sizeof(T);
     size_t max_dim = 1;
 
+    // plane-major batched z-gather scratch (4 lanes x NB rows); raw buffer, grown on demand
+    T *z_batch_buf = nullptr;
+    size_t z_batch_cap = 0;
     T *interp_buffer_1 = nullptr;
     T *interp_buffer_2 = nullptr;
     T *interp_buffer_3 = nullptr;
