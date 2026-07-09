@@ -850,7 +850,7 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
 
             size_t li0 = (gi_begin > begins[0]) ? gi_begin : begins[0];       /* window clamp (grid units) */
             size_t liE = (gi_end < ends[0]) ? gi_end : ends[0];
-            if (_z_batch && gi_end == gi_begin + 2 && gi_begin >= begins[0] && gi_begin < ends[0]) {
+            if constexpr (_z_batch) if (gi_end == gi_begin + 2 && gi_begin >= begins[0] && gi_begin < ends[0]) {
                 // single interior plane: gather NB rows per source plane (contiguous sweeps), then quantize
                 const size_t zi_ = gi_begin;
                 const size_t need = 2 * _z_nb * buffer_len;
@@ -949,7 +949,7 @@ class InterpolationDecomposition : public concepts::DecompositionInterface<T, in
             size_t vector_len = ends[2] > begins[2] ? (ends[2]-begins[2]-1)/strides[2] + 1 : 0;
             size_t ci0 = (gi_begin > begins[0]) ? gi_begin : begins[0];       /* window clamp (grid units) */
             size_t ciE = (gi_end < ends[0]) ? gi_end : ends[0];
-            if (_z_batch && gi_end == gi_begin + 2 && gi_begin >= begins[0] && gi_begin < ends[0]) {
+            if constexpr (_z_batch) if (gi_end == gi_begin + 2 && gi_begin >= begins[0] && gi_begin < ends[0]) {
                 // single interior plane: gather NB rows per source plane (contiguous sweeps), then quantize
                 const size_t zi_ = gi_begin;
                 const size_t need = 4 * _z_nb * buffer_len;

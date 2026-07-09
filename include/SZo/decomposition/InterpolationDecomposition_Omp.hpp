@@ -3269,67 +3269,23 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
                 strides[dims[i]] = stride2x;
             }
             if constexpr (N == 3 && !std::is_integral_v<T>){//avx
-                constexpr bool _fuse_xy = true;   // x+y OMP cache fusion, always on (set false for old path)
                 if(direction == 0 ){//xyz
                     predict_error += interpolation_1d_simd_3d_z<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
                     begin_idx[1] = begin[1];
                     begin_idx[0] = (begin[0] ? begin[0] + stride : 0);
                     strides[0] = stride;
-                    if (_fuse_xy) {
-                        // each thread takes a contiguous z-chunk, runs full y (incl boundary) then x on it -> chunk cached
-                        std::array<size_t, N> by = begin_idx, sy = strides;
-                        std::array<size_t, N> bx = by, sx = sy;
-                        bx[2] = begin[2]; bx[1] = (begin[1] ? begin[1] + stride : 0); sx[1] = stride;
-                        size_t z_ext = end_idx[0] - by[0] + 1;
-                        #pragma omp parallel reduction(+:predict_error)
-                        {
-                            int tid = omp_get_thread_num();
-                            size_t nth = omp_get_num_threads();
-                            size_t nplanes = (z_ext + sy[0] - 1) / sy[0];
-                            size_t ppt = (nplanes + nth - 1) / nth;
-                            size_t zlo = tid * ppt * sy[0];
-                            size_t zhi = (tid + 1) * ppt * sy[0];
-                            for (size_t zt = zlo; zt < zhi; zt += sy[0]) {   // sub-tile = 1 z-plane -> fits L2, y+x fused per plane
-                                std::array<size_t, N> sy2 = sy, sx2 = sx;
-                                predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, by, end_idx, dims[1], sy2, stride, interp_func, quantize_func, zt, zt + sy[0], tid);
-                                predict_error += interpolation_1d_simd_3d_x<CompMode, SkipOverwrite>(data, bx, end_idx, dims[2], sx2, stride, interp_func, quantize_func, zt, zt + sy[0], tid);
-                            }
-                        }
-                    } else {
-                        predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
-                        begin_idx[2] = begin[2];
-                        begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
-                        strides[1] = stride;
-                        predict_error += interpolation_1d_simd_3d_x<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
-                    }
+                    predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
+                    begin_idx[2] = begin[2];
+                    begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
+                    strides[1] = stride;
+                    predict_error += interpolation_1d_simd_3d_x<CompMode, SkipOverwrite>(data, begin_idx, end_idx, dims[2], strides, stride, interp_func, quantize_func);
                 }
                 else{//zyx
-                    if (_fuse_xy) {
-                        std::array<size_t, N> bx = begin_idx, sx = strides;   // x-config (initial)
-                        std::array<size_t, N> by = bx, sy = sx;
-                        by[1] = begin[1]; by[2] = (begin[2] ? begin[2] + stride : 0); sy[2] = stride;
-                        size_t z_ext = end_idx[0] - bx[0] + 1;
-                        #pragma omp parallel reduction(+:predict_error)
-                        {
-                            int tid = omp_get_thread_num();
-                            size_t nth = omp_get_num_threads();
-                            size_t nplanes = (z_ext + sx[0] - 1) / sx[0];
-                            size_t ppt = (nplanes + nth - 1) / nth;
-                            size_t zlo = tid * ppt * sx[0];
-                            size_t zhi = (tid + 1) * ppt * sx[0];
-                            for (size_t zt = zlo; zt < zhi; zt += sx[0]) {   // sub-tile = 1 z-plane -> fits L2
-                                std::array<size_t, N> sx2 = sx, sy2 = sy;
-                                predict_error += interpolation_1d_simd_3d_x<CompMode, false>(data, bx, end_idx, dims[0], sx2, stride, interp_func, quantize_func, zt, zt + sx[0], tid);
-                                predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, by, end_idx, dims[1], sy2, stride, interp_func, quantize_func, zt, zt + sx[0], tid);
-                            }
-                        }
-                    } else {
-                        predict_error += interpolation_1d_simd_3d_x<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
-                        begin_idx[1] = begin[1];
-                        begin_idx[2] = (begin[2] ? begin[2] + stride : 0);
-                        strides[2] = stride;
-                        predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
-                    }
+                    predict_error += interpolation_1d_simd_3d_x<CompMode, false>(data, begin_idx, end_idx, dims[0], strides, stride, interp_func, quantize_func);
+                    begin_idx[1] = begin[1];
+                    begin_idx[2] = (begin[2] ? begin[2] + stride : 0);
+                    strides[2] = stride;
+                    predict_error += interpolation_1d_simd_3d_y<CompMode, false>(data, begin_idx, end_idx, dims[1], strides, stride, interp_func, quantize_func);
                     // z-pass (last, separate); explicit z-config correct for both branches
                     begin_idx[0] = begin[0];
                     begin_idx[1] = (begin[1] ? begin[1] + stride : 0);
