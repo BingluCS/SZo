@@ -155,6 +155,67 @@ double interp_compress_test(
 }
 
 template <class T, uint N>
+void interp_compress_test_batch(
+    const std::vector<std::vector<T>> &sampled_blocks, const Config *confs, int nconf,
+    int block_size, double *ratios_out) {
+    // Flatten config x block into one task pool so all threads can process sampled blocks.
+    size_t B = sampled_blocks.size();
+    size_t total = static_cast<size_t>(nconf) * B;
+    int16_t **quant_inds = new int16_t*[total];
+    uint64_t *quant_inds_size = new uint64_t[total];
+    std::vector<std::vector<T>> unpred_vec(total);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(nconf > 0 && confs[0].openmp)
+#endif
+    for (size_t t = 0; t < total; ++t) {
+        int c = static_cast<int>(t / B);
+        size_t k = t % B;
+        auto sz = make_decomposition_interpolation<TUNING::ENABLED, T, N>(
+            confs[c], LinearQuantizer<T>(confs[c].absErrorBound, confs[c].quantbinCnt / 2));
+        auto cur_block = sampled_blocks[k];
+        std::tie(quant_inds[t], quant_inds_size[t]) = sz.compress(confs[c], cur_block.data());
+        unpred_vec[t] = sz.test_unpred();
+    }
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(nconf > 0 && confs[0].openmp)
+#endif
+    for (int c = 0; c < nconf; ++c) {
+        size_t base = static_cast<size_t>(c) * B;
+        std::vector<size_t> prefix_sum(B << 1);
+        size_t cur_size = 0;
+        for (size_t k = 0; k < B << 1; ++k) {
+            prefix_sum[k] = cur_size;
+            if (k < B) {
+                cur_size += unpred_vec[base + k].size() * sizeof(T);
+            } else {
+                cur_size += quant_inds_size[base + k - B] * sizeof(int16_t);
+            }
+        }
+        uchar *buffer = new uchar[cur_size];
+        for (size_t k = 0; k < B << 1; ++k) {
+            if (k < B) {
+                memcpy(buffer + prefix_sum[k], reinterpret_cast<const uchar *>(unpred_vec[base + k].data()),
+                       unpred_vec[base + k].size() * sizeof(T));
+            } else {
+                memcpy(buffer + prefix_sum[k], reinterpret_cast<const uchar *>(quant_inds[base + k - B]),
+                       quant_inds_size[base + k - B] * sizeof(int16_t));
+            }
+        }
+        size_t cmpCap = cur_size + (cur_size >> 1) + 1024;
+        uchar *cmpData = new uchar[cmpCap];
+        auto lossless = Lossless_zstd();
+        auto cmpSize = lossless.compress(buffer, cur_size, cmpData, cmpCap);
+        ratios_out[c] = confs[c].num * B * sizeof(T) * 1.0 / cmpSize;
+        delete[] cmpData;
+        delete[] buffer;
+    }
+    for (size_t t = 0; t < total; ++t) delete[] quant_inds[t];
+    delete[] quant_inds;
+    delete[] quant_inds_size;
+}
+
+template <class T, uint N>
 double lorenzo_compress_test(
     const std::vector<std::vector<T>> sampled_blocks, const Config &conf, uchar *cmpData,
     size_t cmpCap) {  // test lorenzo cmp on a set of sampled data blocks and return the compression ratio
@@ -250,12 +311,12 @@ size_t SZ_compress_Interp_lorenzo(Config &conf, T *data, uchar *cmpData, size_t 
     std::vector<std::vector<size_t>> starts;
     auto profStride = sampleBlockSize / 4;  // larger is faster, smaller is better
     profiling_block<T, N>(data, conf.dims, starts, sampleBlockSize, conf.absErrorBound,
-                          profStride);  // filter out the non-constant data blocks
+                          profStride, conf.openmp);  // filter out the non-constant data blocks
     size_t num_filtered_blocks = starts.size();
     bool profiling = num_filtered_blocks * per_block_ele_num >= 0.5 * sampleRate * conf.num;  // temp. to refine
     // bool profiling = false;
     sampleBlocks<T, N>(data, conf.dims, sampleBlockSize, sampled_blocks, sampleRate, profiling,
-                       starts);  // sample out same data blocks
+                       starts, 0, conf.openmp);  // sample out same data blocks
     sampling_num = sampled_blocks.size() * per_block_ele_num;
 
     if (sampling_num == 0 || sampling_num >= conf.num * 0.2) {
@@ -292,18 +353,14 @@ size_t SZ_compress_Interp_lorenzo(Config &conf, T *data, uchar *cmpData, size_t 
 
         if (N >= 3) {
             double ratios[4];
-            #ifdef _OPENMP
-            #pragma omp parallel for if(conf.openmp)
-            #endif
+            Config tcs[4];
             for (int i = 0; i < 4; i++) {
-                auto tc = conf;
-                tc.setDims(dims.begin(), dims.end());
-                tc.interpAlgo      = (i / 2 == 0) ? INTERP_ALGO_LINEAR : INTERP_ALGO_CUBIC;
-                tc.interpDirection = (i % 2 == 0) ? 0 : reverse;
-                auto buf = static_cast<uchar *>(malloc(bufferCap));
-                ratios[i] = interp_compress_test<T, N>(sampled_blocks, tc, sampleBlockSize, buf, bufferCap);
-                free(buf);
+                tcs[i] = conf;
+                tcs[i].setDims(dims.begin(), dims.end());
+                tcs[i].interpAlgo      = (i / 2 == 0) ? INTERP_ALGO_LINEAR : INTERP_ALGO_CUBIC;
+                tcs[i].interpDirection = (i % 2 == 0) ? 0 : reverse;
             }
+            interp_compress_test_batch<T, N>(sampled_blocks, tcs, 4, sampleBlockSize, ratios);
             for (int i = 0; i < 4; i++) {
                 if (ratios[i] > best_interp_ratio) {
                     best_interp_ratio = ratios[i];
@@ -316,22 +373,18 @@ size_t SZ_compress_Interp_lorenzo(Config &conf, T *data, uchar *cmpData, size_t 
             // fused: 2(algo)×2(dir)×3(alpha/beta)=12 combos, one parallel pass
             constexpr int total = 4 * 3;
             std::array<double, total> all_ratios;
-            #ifdef _OPENMP
-            #pragma omp parallel for if(conf.openmp)
-            #endif
+            Config tcs2[total];
             for (int t = 0; t < total; t++) {
                 int ai = t % 4;          // algo×direction index
                 int bi = t / 4;          // alpha×beta index
-                auto tc = conf;
-                tc.setDims(dims.begin(), dims.end());
-                tc.interpAlgo      = (ai / 2 == 0) ? INTERP_ALGO_LINEAR : INTERP_ALGO_CUBIC;
-                tc.interpDirection = (ai % 2 == 0) ? 0 : reverse;
-                tc.interpAlpha     = alphalist[bi];
-                tc.interpBeta      = betalist[bi];
-                auto buf = static_cast<uchar *>(malloc(bufferCap));
-                all_ratios[t] = interp_compress_test<T, N>(sampled_blocks, tc, sampleBlockSize, buf, bufferCap);
-                free(buf);
+                tcs2[t] = conf;
+                tcs2[t].setDims(dims.begin(), dims.end());
+                tcs2[t].interpAlgo      = (ai / 2 == 0) ? INTERP_ALGO_LINEAR : INTERP_ALGO_CUBIC;
+                tcs2[t].interpDirection = (ai % 2 == 0) ? 0 : reverse;
+                tcs2[t].interpAlpha     = alphalist[bi];
+                tcs2[t].interpBeta      = betalist[bi];
             }
+            interp_compress_test_batch<T, N>(sampled_blocks, tcs2, total, sampleBlockSize, all_ratios.data());
             for (int t = 0; t < total; t++) {
                 if (all_ratios[t] > best_interp_ratio * 1.02) {
                     best_interp_ratio = all_ratios[t];

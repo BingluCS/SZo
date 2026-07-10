@@ -4,7 +4,7 @@
 namespace SZo {
 template <class T, uint N>
 inline void profiling_block(T *data, std::vector<size_t> &dims, std::vector<std::vector<size_t>> &starts,
-                            size_t block_size, double abseb, size_t stride = 4) {
+                            size_t block_size, double abseb, size_t stride = 4, bool use_omp = false) {
     assert(dims.size() == N);
     if (stride == 0) stride = block_size;
     if constexpr (N == 4) {
@@ -13,7 +13,13 @@ inline void profiling_block(T *data, std::vector<size_t> &dims, std::vector<std:
         if (dimx < block_size || dimy < block_size || dimz < block_size || dimw < block_size) {
             return;
         }
-        for (size_t i = 0; i < dimx - block_size; i += block_size) {
+        size_t n_i = (dimx - block_size + block_size - 1) / block_size;
+        std::vector<std::vector<std::vector<size_t>>> starts_i(n_i);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(use_omp)
+#endif
+        for (size_t vi = 0; vi < n_i; vi++) {
+            size_t i = vi * block_size;
             for (size_t j = 0; j < dimy - block_size; j += block_size) {
                 for (size_t k = 0; k < dimz - block_size; k += block_size) {
                     for (size_t l = 0; l < dimw - block_size; l += block_size) {
@@ -36,18 +42,27 @@ inline void profiling_block(T *data, std::vector<size_t> &dims, std::vector<std:
                         }
                         if (max - min > abseb) {
                             size_t a[4] = {i, j, k, l};
-                            starts.push_back(std::vector<size_t>(a, a + 4));
+                            starts_i[vi].push_back(std::vector<size_t>(a, a + 4));
                         }
                     }
                 }
             }
+        }
+        for (size_t vi = 0; vi < n_i; vi++) {
+            starts.insert(starts.end(), starts_i[vi].begin(), starts_i[vi].end());
         }
     } else if constexpr (N == 3) {
         size_t dimx = dims[0], dimy = dims[1], dimz = dims[2], dimyz = dimy * dimz;
         if (dimx < block_size || dimy < block_size || dimz < block_size) {
             return;
         }
-        for (size_t i = 0; i < dimx - block_size; i += block_size) {
+        size_t n_i = (dimx - block_size + block_size - 1) / block_size;
+        std::vector<std::vector<std::vector<size_t>>> starts_i(n_i);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(use_omp)
+#endif
+        for (size_t vi = 0; vi < n_i; vi++) {
+            size_t i = vi * block_size;
             for (size_t j = 0; j < dimy - block_size; j += block_size) {
                 for (size_t k = 0; k < dimz - block_size; k += block_size) {
                     size_t start_idx = i * dimyz + j * dimz + k;
@@ -67,17 +82,26 @@ inline void profiling_block(T *data, std::vector<size_t> &dims, std::vector<std:
                     }
                     if (max - min > abseb) {
                         size_t a[3] = {i, j, k};
-                        starts.push_back(std::vector<size_t>(a, a + 3));
+                        starts_i[vi].push_back(std::vector<size_t>(a, a + 3));
                     }
                 }
             }
+        }
+        for (size_t vi = 0; vi < n_i; vi++) {
+            starts.insert(starts.end(), starts_i[vi].begin(), starts_i[vi].end());
         }
     } else if constexpr (N == 2) {
         size_t dimx = dims[0], dimy = dims[1];
         if (dimx < block_size || dimy < block_size) {
             return;
         }
-        for (size_t i = 0; i < dimx - block_size; i += block_size) {
+        size_t n_i = (dimx - block_size + block_size - 1) / block_size;
+        std::vector<std::vector<std::vector<size_t>>> starts_i(n_i);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(use_omp)
+#endif
+        for (size_t vi = 0; vi < n_i; vi++) {
+            size_t i = vi * block_size;
             for (size_t j = 0; j < dimy - block_size; j += block_size) {
                 size_t start_idx = i * dimy + j;
                 T min = data[start_idx];
@@ -94,16 +118,25 @@ inline void profiling_block(T *data, std::vector<size_t> &dims, std::vector<std:
                 }
                 if (max - min > abseb) {
                     size_t a[2] = {i, j};
-                    starts.push_back(std::vector<size_t>(a, a + 2));
+                    starts_i[vi].push_back(std::vector<size_t>(a, a + 2));
                 }
             }
+        }
+        for (size_t vi = 0; vi < n_i; vi++) {
+            starts.insert(starts.end(), starts_i[vi].begin(), starts_i[vi].end());
         }
     } else {
         size_t dimx = dims[0];
         if (dimx < block_size) {
             return;
         }
-        for (size_t i = 0; i < dimx - block_size; i += block_size) {
+        size_t n_i = (dimx - block_size + block_size - 1) / block_size;
+        std::vector<std::vector<size_t>> starts_i(n_i);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(use_omp)
+#endif
+        for (size_t vi = 0; vi < n_i; vi++) {
+            size_t i = vi * block_size;
             size_t start_idx = i;
             T min = data[start_idx];
             T max = data[start_idx];
@@ -116,9 +149,11 @@ inline void profiling_block(T *data, std::vector<size_t> &dims, std::vector<std:
                     max = cur_value;
             }
             if (max - min > abseb) {
-                size_t a[1] = {i};
-                starts.push_back(std::vector<size_t>(a, a + 1));
+                starts_i[vi].push_back(i);
             }
+        }
+        for (size_t vi = 0; vi < n_i; vi++) {
+            if (!starts_i[vi].empty()) starts.push_back(starts_i[vi]);
         }
     }
 }
@@ -198,7 +233,7 @@ inline void sample_blocks(T *data, std::vector<T> &sampling_data, std::vector<si
 template <class T, uint N>
 void sampleBlocks(T *data, std::vector<size_t> &dims, size_t sampleBlockSize,
                   std::vector<std::vector<T>> &sampled_blocks, double sample_rate, int profiling,
-                  std::vector<std::vector<size_t>> &starts, int var_first = 0) {
+                  std::vector<std::vector<size_t>> &starts, int var_first = 0, bool use_omp = false) {
     for (uint i = 0; i < N; i++) {
         if (dims[i] < sampleBlockSize) {
             return;
@@ -221,65 +256,88 @@ void sampleBlocks(T *data, std::vector<size_t> &dims, size_t sampleBlockSize,
         size_t num_filtered_blocks = starts.size();
         size_t sample_stride = static_cast<size_t>(num_filtered_blocks / (totalblock_num * sample_rate));
         if (sample_stride <= 0) sample_stride = 1;
-        for (size_t i = 0; i < num_filtered_blocks; i += sample_stride) {
-            std::vector<T> s_block;
-            sample_blocks<T, N>(data, s_block, dims, starts[i], sampleBlockSize + 1);
-            sampled_blocks.push_back(s_block);
+        size_t n_sel = (num_filtered_blocks + sample_stride - 1) / sample_stride;
+        sampled_blocks.resize(n_sel);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(use_omp)
+#endif
+        for (size_t si = 0; si < n_sel; si++) {
+            sample_blocks<T, N>(data, sampled_blocks[si], dims, starts[si * sample_stride], sampleBlockSize + 1);
         }
     } else {
         size_t sample_stride = static_cast<size_t>(1.0 / sample_rate);
         if (sample_stride <= 0) sample_stride = 1;
         if constexpr (N == 1) {
+            std::vector<std::vector<size_t>> sel;
             for (size_t x_start = 0; x_start < dims[0] - sampleBlockSize; x_start += sampleBlockSize) {
                 if (idx % sample_stride == 0) {
-                    std::vector<size_t> starts{x_start};
-                    std::vector<T> s_block;
-                    sample_blocks<T, N>(data, s_block, dims, starts, sampleBlockSize + 1);
-                    sampled_blocks.push_back(s_block);
+                    sel.push_back(std::vector<size_t>{x_start});
                 }
                 idx += 1;
             }
+            sampled_blocks.resize(sel.size());
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(use_omp)
+#endif
+            for (size_t si = 0; si < sel.size(); si++) {
+                sample_blocks<T, N>(data, sampled_blocks[si], dims, sel[si], sampleBlockSize + 1);
+            }
         } else if constexpr (N == 2) {
+            std::vector<std::vector<size_t>> sel;
             for (size_t x_start = 0; x_start < dims[0] - sampleBlockSize; x_start += sampleBlockSize) {
                 for (size_t y_start = 0; y_start < dims[1] - sampleBlockSize; y_start += sampleBlockSize) {
                     if (idx % sample_stride == 0) {
-                        std::vector<size_t> starts{x_start, y_start};
-                        std::vector<T> s_block;
-                        sample_blocks<T, N>(data, s_block, dims, starts, sampleBlockSize + 1);
-                        sampled_blocks.push_back(s_block);
+                        sel.push_back(std::vector<size_t>{x_start, y_start});
                     }
                     idx += 1;
                 }
             }
+            sampled_blocks.resize(sel.size());
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(use_omp)
+#endif
+            for (size_t si = 0; si < sel.size(); si++) {
+                sample_blocks<T, N>(data, sampled_blocks[si], dims, sel[si], sampleBlockSize + 1);
+            }
         } else if constexpr (N == 3) {
+            std::vector<std::vector<size_t>> sel;
             for (size_t x_start = 0; x_start < dims[0] - sampleBlockSize; x_start += sampleBlockSize) {
                 for (size_t y_start = 0; y_start < dims[1] - sampleBlockSize; y_start += sampleBlockSize) {
                     for (size_t z_start = 0; z_start < dims[2] - sampleBlockSize; z_start += sampleBlockSize) {
                         if (idx % sample_stride == 0) {
-                            std::vector<size_t> starts{x_start, y_start, z_start};
-                            std::vector<T> s_block;
-                            sample_blocks<T, N>(data, s_block, dims, starts, sampleBlockSize + 1);
-                            sampled_blocks.push_back(s_block);
+                            sel.push_back(std::vector<size_t>{x_start, y_start, z_start});
                         }
                         idx += 1;
                     }
                 }
             }
+            sampled_blocks.resize(sel.size());
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(use_omp)
+#endif
+            for (size_t si = 0; si < sel.size(); si++) {
+                sample_blocks<T, N>(data, sampled_blocks[si], dims, sel[si], sampleBlockSize + 1);
+            }
         } else if constexpr (N == 4) {
+            std::vector<std::vector<size_t>> sel;
             for (size_t x_start = 0; x_start < dims[0] - sampleBlockSize; x_start += sampleBlockSize) {
                 for (size_t y_start = 0; y_start < dims[1] - sampleBlockSize; y_start += sampleBlockSize) {
                     for (size_t z_start = 0; z_start < dims[2] - sampleBlockSize; z_start += sampleBlockSize) {
                         for (size_t w_start = 0; w_start < dims[3] - sampleBlockSize; w_start += sampleBlockSize) {
                             if (idx % sample_stride == 0) {
-                                std::vector<size_t> starts{x_start, y_start, z_start, w_start};
-                                std::vector<T> s_block;
-                                sample_blocks<T, N>(data, s_block, dims, starts, sampleBlockSize + 1);
-                                sampled_blocks.push_back(s_block);
+                                sel.push_back(std::vector<size_t>{x_start, y_start, z_start, w_start});
                             }
                             idx += 1;
                         }
                     }
                 }
+            }
+            sampled_blocks.resize(sel.size());
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(use_omp)
+#endif
+            for (size_t si = 0; si < sel.size(); si++) {
+                sample_blocks<T, N>(data, sampled_blocks[si], dims, sel[si], sampleBlockSize + 1);
             }
         }
     }
