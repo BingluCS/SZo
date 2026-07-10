@@ -337,14 +337,23 @@ size_t SZ_compress_Interp_lorenzo(Config &conf, T *data, uchar *cmpData, size_t 
     {
         // tune interp
         conf.interpDirection = 0;
-        conf.interpAlpha = 1.25;
-        conf.interpBeta = 2.0;
+        if constexpr (N <= 2) {
+            conf.interpAlpha = 1.0;
+            conf.interpBeta = 1.0;
+        } else {
+            conf.interpAlpha = 1.25;
+            conf.interpBeta = 2.0;
+        }
         std::vector<size_t> dims(N, sampleBlockSize + 1);
         uint8_t reverse = factorial(N) - 1;
 
         const int ablist_size = 3;
-        auto alphalist = std::array<double,ablist_size>{1.25, 1.0, 1.5};
-        auto betalist  = std::array<double,ablist_size>{2.0, 1.0, 2.5};
+        auto alphalist = N <= 2
+            ? std::array<double, ablist_size>{1.0, 1.25, 1.5}
+            : std::array<double, ablist_size>{1.25, 1.0, 1.5};
+        auto betalist = N <= 2
+            ? std::array<double, ablist_size>{1.0, 2.0, 2.5}
+            : std::array<double, ablist_size>{2.0, 1.0, 2.5};
 
         int max_t = 1;
 #ifdef _OPENMP
@@ -370,39 +379,36 @@ size_t SZ_compress_Interp_lorenzo(Config &conf, T *data, uchar *cmpData, size_t 
             }
         }
         else if (max_t >= 6) {
-            // fused: 2(algo)×2(dir)×3(alpha/beta)=12 combos, one parallel pass
-            constexpr int total = 4 * 3;
-            std::array<double, total> all_ratios;
-            Config tcs2[total];
-            for (int t = 0; t < total; t++) {
-                int ai = t % 4;          // algo×direction index
-                int bi = t / 4;          // alpha×beta index
-                tcs2[t] = conf;
-                tcs2[t].setDims(dims.begin(), dims.end());
-                tcs2[t].interpAlgo      = (ai / 2 == 0) ? INTERP_ALGO_LINEAR : INTERP_ALGO_CUBIC;
-                tcs2[t].interpDirection = (ai % 2 == 0) ? 0 : reverse;
-                tcs2[t].interpAlpha     = alphalist[bi];
-                tcs2[t].interpBeta      = betalist[bi];
+            // Keep both alpha/beta groups in one OpenMP task pool.
+            constexpr int algo_direction_count = 4;
+            constexpr int high_thread_ab_count = 2;
+            constexpr int candidate_count = algo_direction_count * high_thread_ab_count;
+            constexpr std::array<double, high_thread_ab_count> high_thread_alphas{1.0, 1.25};
+            constexpr std::array<double, high_thread_ab_count> high_thread_betas{1.0, 2.0};
+            std::array<double, candidate_count> candidate_ratios;
+            Config candidate_confs[candidate_count];
+            for (int i = 0; i < candidate_count; i++) {
+                const int algo_direction = i % algo_direction_count;
+                const int ab = i / algo_direction_count;
+                candidate_confs[i] = conf;
+                candidate_confs[i].setDims(dims.begin(), dims.end());
+                candidate_confs[i].interpAlgo =
+                    (algo_direction / 2 == 0) ? INTERP_ALGO_LINEAR : INTERP_ALGO_CUBIC;
+                candidate_confs[i].interpDirection =
+                    (algo_direction % 2 == 0) ? 0 : reverse;
+                candidate_confs[i].interpAlpha = high_thread_alphas[ab];
+                candidate_confs[i].interpBeta = high_thread_betas[ab];
             }
-            interp_compress_test_batch<T, N>(sampled_blocks, tcs2, total, sampleBlockSize, all_ratios.data());
-            for (int t = 0; t < total; t++) {
-                if (all_ratios[t] > best_interp_ratio * 1.02) {
-                    best_interp_ratio = all_ratios[t];
-                    int ai = t % 4;
-                    conf.interpAlgo      = (ai / 2 == 0) ? INTERP_ALGO_LINEAR : INTERP_ALGO_CUBIC;
-                    conf.interpDirection = (ai % 2 == 0) ? 0 : reverse;
-                    int bi = t / 4;
-                    conf.interpAlpha     = alphalist[bi];
-                    conf.interpBeta      = betalist[bi];
-
+            interp_compress_test_batch<T, N>(sampled_blocks, candidate_confs, candidate_count,
+                                               sampleBlockSize, candidate_ratios.data());
+            for (int i = 0; i < candidate_count; i++) {
+                if (candidate_ratios[i] > best_interp_ratio) {
+                    best_interp_ratio = candidate_ratios[i];
+                    conf.interpAlgo = candidate_confs[i].interpAlgo;
+                    conf.interpDirection = candidate_confs[i].interpDirection;
+                    conf.interpAlpha = candidate_confs[i].interpAlpha;
+                    conf.interpBeta = candidate_confs[i].interpBeta;
                 }
-                else if (all_ratios[t] > best_interp_ratio) {
-                    best_interp_ratio = all_ratios[t];
-                    int ai = t % 4;
-                    conf.interpAlgo      = (ai / 2 == 0) ? INTERP_ALGO_LINEAR : INTERP_ALGO_CUBIC;
-                    conf.interpDirection = (ai % 2 == 0) ? 0 : reverse;
-                }
-
             }
         } else {
             // two-step: 4 algo×dir, then 3 alpha×beta (fewer threads → steps beat fused)

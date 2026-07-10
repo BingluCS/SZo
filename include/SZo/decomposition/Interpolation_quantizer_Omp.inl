@@ -468,9 +468,11 @@ namespace SZo {
 
                     __m128i quant_avx_i = _mm256_cvtpd_epi32(quant_avx);
 
-                    #pragma unroll
-                    for (size_t j = 0; j < step; ++j) {
-                        data[(start + (j << 1)) * offset] = tmp[j];
+                    if constexpr (!SkipOverwrite) {
+                        #pragma unroll
+                        for (size_t j = 0; j < step; ++j) {
+                            data[(start + (j << 1)) * offset] = tmp[j];
+                        }
                     }
                     unsigned esc = static_cast<unsigned>(_mm_movemask_ps(_mm_castsi128_ps(
                                        _mm_cmpeq_epi32(quant_avx_i, _mm_set1_epi32(-32768)))));
@@ -583,9 +585,11 @@ namespace SZo {
                     quantize_1D_float(sum, ori_avx, quant_avx, tmp);
 
                     __m256i quant_avx_i = _mm256_cvtps_epi32(quant_avx);
-                    #pragma unroll
-                    for (size_t j = 0; j < step; ++j) {
-                        data[(start + (j << 1)) * offset] = tmp[j];
+                    if constexpr (!SkipOverwrite) {
+                        #pragma unroll
+                        for (size_t j = 0; j < step; ++j) {
+                            data[(start + (j << 1)) * offset] = tmp[j];
+                        }
                     }
                     unsigned esc = static_cast<unsigned>(_mm256_movemask_ps(_mm256_castsi256_ps(
                                        _mm256_cmpeq_epi32(quant_avx_i, _mm256_set1_epi32(-32768)))));
@@ -674,9 +678,11 @@ namespace SZo {
 
                     __m128i quant_avx_i = _mm256_cvtpd_epi32(quant_avx);
 
-                    #pragma unroll
-                    for (size_t j = 0; j < step; ++j) {
-                        data[(start + (j << 1)) * offset] = tmp[j];
+                    if constexpr (!SkipOverwrite) {
+                        #pragma unroll
+                        for (size_t j = 0; j < step; ++j) {
+                            data[(start + (j << 1)) * offset] = tmp[j];
+                        }
                     }
                     unsigned esc = static_cast<unsigned>(_mm_movemask_ps(_mm_castsi128_ps(
                                        _mm_cmpeq_epi32(quant_avx_i, _mm_set1_epi32(-32768)))));

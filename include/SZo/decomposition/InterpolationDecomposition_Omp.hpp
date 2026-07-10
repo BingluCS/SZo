@@ -1964,27 +1964,16 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
 
             size_t base = total_iters / nthreads;
             size_t rem  = total_iters % nthreads;
-            std::vector<size_t> starts(nthreads);
-            std::vector<size_t> ends_vec(nthreads);
-            #pragma omp parallel for
-            for(size_t tid=0; tid < nthreads; tid++){
-                size_t iter_start, my_iters;
-                if(tid < rem){
-                    my_iters = base + 1;
-                    iter_start = tid * (base + 1);
-                } else {
-                    my_iters = base;
-                    iter_start = rem * (base + 1) + (tid - rem) * base;
-                }
-                starts[tid] = begins[0] + iter_start * strides[0];
-                ends_vec[tid] = begins[0] + (iter_start + my_iters) * strides[0];
-            }
             #pragma omp parallel //num_threads(omp_get_max_threads())
             {
                 size_t tid = omp_get_thread_num();
 
-                size_t start_idx = starts[tid];
-                size_t end_idx   = ends_vec[tid];
+                size_t my_iters = base + (tid < rem);
+                size_t iter_start = tid < rem
+                    ? tid * (base + 1)
+                    : rem * (base + 1) + (tid - rem) * base;
+                size_t start_idx = begins[0] + iter_start * strides[0];
+                size_t end_idx = start_idx + my_iters * strides[0];
 
 
                 auto buffer_offset = buffer_len * tid;
@@ -2100,7 +2089,6 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
 
             if (n >= 5) {
                 auto cur_ij_offset = offset + dim_offsets[0];
-                #pragma omp parallel for
                 for (size_t i = 0; i < vector_len; ++i) {
                     auto cur_offset =  cur_ij_offset + begins[1] + i * strides[1];
                     cur_buffer_2[i] = data[cur_offset - stride];
@@ -2112,7 +2100,6 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
             }
             else if (n >= 3) {
                 auto cur_ij_offset = offset + dim_offsets[0];
-                #pragma omp parallel for
                 for (size_t i = 0; i < vector_len; ++i) {
                     auto cur_offset =  cur_ij_offset + begins[1] + i * strides[1];
                     cur_buffer_2[i] = data[cur_offset - stride];
@@ -2123,7 +2110,6 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
             }
             else if (n >= 1) {
                 auto cur_ij_offset = offset + dim_offsets[0];
-                #pragma omp parallel for
                 for (size_t i = 0; i < vector_len; ++i) {
                     auto cur_offset =  cur_ij_offset + begins[1] + i * strides[1];
                     cur_buffer_2[i] = data[cur_offset - stride];
@@ -2136,27 +2122,15 @@ class InterpolationDecomposition_OMP : public concepts::DecompositionInterface_O
 
             size_t base = total_iters / nthreads;
             size_t rem  = total_iters % nthreads;
-            std::vector<size_t> starts(nthreads);
-            std::vector<size_t> ends_vec(nthreads);
-            #pragma omp parallel for
-            for(size_t tid=0; tid < nthreads; tid++){
-                size_t iter_start, my_iters;
-                if(tid < rem){
-                    my_iters = base + 1;
-                    iter_start = tid * (base + 1);
-                } else {
-                    my_iters = base;
-                    iter_start = rem * (base + 1) + (tid - rem) * base;
-                }
-                starts[tid] = begins[0] + iter_start * strides[0];
-                ends_vec[tid] = begins[0] + (iter_start + my_iters) * strides[0];
-            }
-
             #pragma omp parallel //num_threads(omp_get_max_threads())
             {
                 size_t tid = omp_get_thread_num();
-                size_t start_idx = starts[tid];
-                size_t end_idx   = ends_vec[tid];
+                size_t my_iters = base + (tid < rem);
+                size_t iter_start = tid < rem
+                    ? tid * (base + 1)
+                    : rem * (base + 1) + (tid - rem) * base;
+                size_t start_idx = begins[0] + iter_start * strides[0];
+                size_t end_idx = start_idx + my_iters * strides[0];
 
 
                 auto buffer_offset = buffer_len * tid;
@@ -2660,43 +2634,35 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
                 //     // }
                 }
             }
-            std::vector<size_t> boundaries;
-            // boundaries.push_back(1);
-            // if (n % 2 == 1 && n > 3) {
-            //     boundaries.push_back(n - 2);
-            // }
-            // if (n % 2 == 0 && n > 4) {
-            //     boundaries.push_back(n - 3);
-            // }
             if (n % 2 == 0 && n > 2) {
-                boundaries.push_back(n - 1);
-            }
-
-            for (auto boundary : boundaries) {
-                begins[direction] = boundary;
-                ends[direction] = boundary + 1;
-                foreach_omp2
-                    <T, N>(data, offset, begins, ends, strides, dim_offsets, [&](T *d, int tid) {
-                        if (boundary >= 3) {
-                            if (boundary + 3 < n)
-                                quantize_func(
-                                    d - data, *d,
+                /* final plane n-1: scalar edge predictors read data directly (no buffer state) */
+                size_t bnd = n - 1;
+                #pragma omp parallel for
+                for (size_t j = begins[1]; j < ends[1]; j += strides[1]) {
+                    int tid = omp_get_thread_num();
+                    auto row = offset + bnd * dim_offsets[0] + j * dim_offsets[1];
+                    for (size_t k = begins[2]; k < ends[2]; k += strides[2]) {
+                        T *d = data + row + k;
+                        if (bnd >= 3) {
+                            if (bnd + 3 < n)
+                                quantize_point<CompMode, SkipOverwrite>(d - data, *d,
                                     interp_cubic(*(d - stride3x), *(d - stride), *(d + stride), *(d + stride3x)), tid);
-                            else if (boundary + 1 < n)
-                                quantize_func(d - data, *d,
-                                              interp_quad_2(*(d - stride3x), *(d - stride), *(d + stride)), tid);
+                            else if (bnd + 1 < n)
+                                quantize_point<CompMode, SkipOverwrite>(d - data, *d,
+                                    interp_quad_2(*(d - stride3x), *(d - stride), *(d + stride)), tid);
                             else
                                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear1(*(d - stride3x), *(d - stride)), tid);
                         } else {
-                            if (boundary + 3 < n)
-                                quantize_func(d - data, *d,
-                                              interp_quad_1(*(d - stride), *(d + stride), *(d + stride3x)), tid);
-                            else if (boundary + 1 < n)
+                            if (bnd + 3 < n)
+                                quantize_point<CompMode, SkipOverwrite>(d - data, *d,
+                                    interp_quad_1(*(d - stride), *(d + stride), *(d + stride3x)), tid);
+                            else if (bnd + 1 < n)
                                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, interp_linear(*(d - stride), *(d + stride)), tid);
                             else
                                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, *(d - stride), tid);
                         }
-                    });
+                    }
+                }
             }
         }
         return predict_error;
@@ -2706,7 +2672,8 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
     double interpolation_1d_simd_3d_y(T *data, const std::array<size_t, N> &begin_idx,
                                               const std::array<size_t, N> &end_idx, const size_t &direction,
                                               std::array<size_t, N> &strides, const size_t &math_stride,
-                                              const std::string &interp_func, QuantizeFunc &&quantize_func, size_t zi_begin=0, size_t zi_end=~size_t(0), int force_tid=-1) {
+                                              const std::string &interp_func, QuantizeFunc &&quantize_func,
+                                              size_t zi_begin = 0, size_t zi_end = ~size_t(0)) {
         assert(direction==1  && N==3);
         for (size_t i = 0; i < N; ++i) {
             if (end_idx[i] < begin_idx[i]) return 0;
@@ -2729,6 +2696,7 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
         dim_offsets[direction] = stride;
         if (zi_begin > begins[0]) begins[0] = zi_begin;
         if (zi_end < ends[0]) ends[0] = zi_end;
+
         if (interp_func == "linear") {
             size_t last_linear_stride = (SkipOverwrite ? 3 * stride : 2 * stride);
             // begins[direction] = 1;
@@ -2753,9 +2721,9 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
             strides[direction] = 2;
             size_t vector_len = ends[2] > begins[2] ? (ends[2]-begins[2]-1)/strides[2] + 1 : 0;
 
-            #pragma omp parallel for if(force_tid < 0)
+            #pragma omp parallel for
             for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
-                int tid = (force_tid >= 0) ? force_tid : omp_get_thread_num();
+                int tid = omp_get_thread_num();
                 auto buffer_offset = buffer_len * tid;
                 auto cur_buffer_1 = interp_buffer_1 + buffer_offset;
                 auto cur_buffer_2 = interp_buffer_2 + buffer_offset;
@@ -2850,9 +2818,9 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
             strides[direction] = 2;
             size_t vector_len = ends[2] > begins[2] ? (ends[2]-begins[2]-1)/strides[2] + 1 : 0;
 
-            #pragma omp parallel for if(force_tid < 0)
+            #pragma omp parallel for
             for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
-                int tid = (force_tid >= 0) ? force_tid : omp_get_thread_num();
+                int tid = omp_get_thread_num();
                 auto buffer_offset = buffer_len * tid;
                 auto cur_buffer_1 = interp_buffer_1 + buffer_offset;
                 auto cur_buffer_2 = interp_buffer_2 + buffer_offset;
@@ -3012,7 +2980,7 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
                             else
                                 quantize_point<CompMode, SkipOverwrite>(d - data, *d, *(d - stride), tid);
                         }
-                    }, force_tid);
+                    });
             }
         }
         return predict_error;
@@ -3023,7 +2991,8 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
     double interpolation_1d_simd_3d_x(T *data, const std::array<size_t, N> &begin_idx,
                                               const std::array<size_t, N> &end_idx, const size_t &direction,
                                               std::array<size_t, N> &strides, const size_t &math_stride,
-                                              const std::string &interp_func, QuantizeFunc &&quantize_func, size_t zi_begin=0, size_t zi_end=~size_t(0), int force_tid=-1) {
+                                              const std::string &interp_func, QuantizeFunc &&quantize_func,
+                                              size_t zi_begin = 0, size_t zi_end = ~size_t(0)) {
         // assert(direction==2 && N==3);
         for (size_t i = 0; i < N; ++i) {
             if (end_idx[i] < begin_idx[i]) return 0;
@@ -3071,13 +3040,24 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
             ends[direction] = n;
             strides[direction] = 2;
             // size_t odd_len = n/2;//, even_len = n - odd_len;
-            #pragma omp parallel for if(force_tid < 0)
+            #pragma omp parallel for collapse(2) schedule(static)
             for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
-                int tid = (force_tid >= 0) ? force_tid : omp_get_thread_num();
                 for(size_t j = begins[1]; j < ends[1]; j += strides[1]){
+                    int tid = omp_get_thread_num();
                     auto cur_ij_offset = offset + i * dim_offsets[0] + j * dim_offsets[1];
-                    interp_linear_and_quantize_1D_line<CompMode, false, SkipOverwrite>(
-                        data, n, dim_offsets[direction], cur_ij_offset, tid, quantize_func);
+                    if (n >= 64) {
+                        auto even_buffer = interp_buffer_1 + buffer_len * tid;
+                        size_t even_len = n - n / 2;
+                        for (size_t k = 0; k < even_len; ++k)
+                            even_buffer[k] = data[cur_ij_offset + (k << 1) * dim_offsets[direction]];
+                        interp_linear_and_quantize_1D<CompMode,
+                            CompMode == COMPMODE::COMP && SkipOverwrite>(
+                            even_buffer, n, data + cur_ij_offset, dim_offsets[direction],
+                            cur_ij_offset, tid, quantize_func);
+                    } else {
+                        interp_linear_and_quantize_1D_line<CompMode, false, SkipOverwrite>(
+                            data, n, dim_offsets[direction], cur_ij_offset, tid, quantize_func);
+                    }
                     // for (size_t k = 0; k < odd_len; ++k ){
                     //     auto pred = cur_pred_buffer[k];
                     //     auto d = data + cur_ij_offset + (2 * k + 1) * dim_offsets[2];
@@ -3096,13 +3076,24 @@ template <COMPMODE CompMode, bool SkipOverwrite, class QuantizeFunc>
             ends[direction] = n;
             strides[direction] = 2;
             // size_t odd_len = n/2;//, even_len = n - odd_len;
-            #pragma omp parallel for if(force_tid < 0)
+            #pragma omp parallel for collapse(2) schedule(static)
             for (size_t i = begins[0]; i < ends[0]; i += strides[0]) {
-                int tid = (force_tid >= 0) ? force_tid : omp_get_thread_num();
                 for(size_t j = begins[1]; j < ends[1]; j += strides[1]){
+                    int tid = omp_get_thread_num();
                     auto cur_ij_offset = offset + i * dim_offsets[0] + j * dim_offsets[1];
-                    interp_cubic_and_quantize_1D_line<CompMode, false, SkipOverwrite>(
-                        data, n, dim_offsets[direction], cur_ij_offset, tid, quantize_func);
+                    if (n >= 64) {
+                        auto even_buffer = interp_buffer_1 + buffer_len * tid;
+                        size_t even_len = n - n / 2;
+                        for (size_t k = 0; k < even_len; ++k)
+                            even_buffer[k] = data[cur_ij_offset + (k << 1) * dim_offsets[direction]];
+                        interp_cubic_and_quantize_1D<CompMode,
+                            CompMode == COMPMODE::COMP && SkipOverwrite>(
+                            even_buffer, n, data + cur_ij_offset, dim_offsets[direction],
+                            cur_ij_offset, tid, quantize_func);
+                    } else {
+                        interp_cubic_and_quantize_1D_line<CompMode, false, SkipOverwrite>(
+                            data, n, dim_offsets[direction], cur_ij_offset, tid, quantize_func);
+                    }
                     // interp_cubic_1D(cur_buffer,cur_pred_buffer, n);
                     // for (size_t k = 0; k < odd_len; ++k ){
                     //     auto pred = cur_pred_buffer[k];
