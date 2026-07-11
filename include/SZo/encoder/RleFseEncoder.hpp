@@ -313,7 +313,7 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
     // }
 
     // ---- order-1 model constants (context buckets + tANS byte alphabet) ----
-    static constexpr int O1_NCTX = 11;
+    static constexpr int O1_NCTX = 15;
     static constexpr int O1T_PB = 11;                  // tANS: FSE tableLog (libzstd build caps FSE_MAX_TABLELOG=11)
     static constexpr uint32_t O1T_M = 1u << O1T_PB;    // 2048
     static constexpr int O1T_NSYM = 256;               // tANS: FSE byte alphabet; 255 = escape (|code|>=128)
@@ -364,13 +364,27 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
 
     static void o1_normalize(const uint32_t *cnt, uint16_t *freq, int nsym = O1T_NSYM, int Mval = O1T_M) {
         uint64_t total = 0; 
-        for (int s = 0; s < nsym; s++) 
+        int nonzero = 0;
+        for (int s = 0; s < nsym; s++) {
             total += cnt[s];
+            nonzero += (cnt[s] != 0);
+        }
         if (total == 0) { 
             for (int s = 0; s < nsym; s++) 
             freq[s] = 0; 
             freq[0] = Mval; 
             return; 
+        }
+        if (nonzero > 1 && Mval > 0 && (Mval & (Mval - 1)) == 0) {
+            int16_t norm[O1T_NSYM];
+            unsigned tableLog = 31u - static_cast<unsigned>(__builtin_clz(static_cast<unsigned>(Mval)));
+            size_t r = FSE_normalizeCount(norm, tableLog, cnt, static_cast<size_t>(total),
+                                          static_cast<unsigned>(nsym - 1));
+            if (!FSE_isError(r)) {
+                for (int s = 0; s < nsym; s++)
+                    freq[s] = static_cast<uint16_t>(norm[s]);
+                return;
+            }
         }
         int sum = 0, maxf = 0; 
         int argmax = 0;
@@ -581,18 +595,18 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
         
         uint16_t *nf = static_cast<uint16_t *>(malloc(O1_NCTX * O1T_NSYM * 2));
 
-        const void **stTab =  static_cast<const void **>(malloc(O1_NCTX * sizeof(void *)));
-        const void **syTT = static_cast<const void **>(malloc(O1_NCTX * sizeof(void *)));
-
+        const void *stTab[O1_NCTX];
+        const void *syTT[O1_NCTX];
         size_t ctsz = FSE_CTABLE_SIZE_U32(O1T_PB, O1T_NSYM - 1);
-        FSE_CTable **ct = static_cast<FSE_CTable **>(malloc(O1_NCTX * sizeof(FSE_CTable *)));
+        FSE_CTable *ct[O1_NCTX];
+        FSE_CTable *ct_storage = static_cast<FSE_CTable *>(malloc(O1_NCTX * ctsz * sizeof(FSE_CTable)));
 
         int16_t normc[O1T_NSYM];
         for (int c = 0; c < O1_NCTX; c++) {
             o1_normalize(cnt + c * O1T_NSYM, nf + c * O1T_NSYM, O1T_NSYM, O1T_M);
             for (int s = 0; s < O1T_NSYM; s++) 
                 normc[s] = nf[c * O1T_NSYM + s];
-            ct[c] = static_cast<FSE_CTable *>(malloc(ctsz * sizeof(FSE_CTable)));
+            ct[c] = ct_storage + static_cast<size_t>(c) * ctsz;
             FSE_buildCTable(ct[c], normc, O1T_NSYM - 1, O1T_PB);
             FSE_CState_t tmp; 
             FSE_initCState(&tmp, ct[c]); 
@@ -665,11 +679,9 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
         //     std::fprintf(stderr, "[O1tans] N=%zu O1T_K=%d tANS=%zu(%.3f b/sym) novf=%zu(%.1f%%)\n", N, O1T_K, bt, 
         //         bt * 8.0 / N, novf, 100.0 * novf / N); 
         // }
-        for (int c = 0; c < O1_NCTX; c++) 
-            free(ct[c]);
         for (int k = 0; k < O1T_K; k++) 
             free(buf[k]);
-        free(ct); free(stTab); free(syTT); free(ovf); free(cnt); free(nf);
+        free(ct_storage); free(ovf); free(cnt); free(nf);
         return (bytes - sb);
     }
 
@@ -708,13 +720,14 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
             totov += nvk[k]; 
         int16_t *ovf = decode_o1_ovf(bytes, totov);
         size_t dtsz = FSE_DTABLE_SIZE_U32(O1T_PB);
-        FSE_DTable **dt = static_cast<FSE_CTable **>(malloc(O1_NCTX * sizeof(FSE_DTable *)));
+        FSE_DTable *dt[O1_NCTX];
+        FSE_DTable *dt_storage = static_cast<FSE_DTable *>(malloc(O1_NCTX * dtsz * sizeof(FSE_DTable)));
         int16_t normc[O1T_NSYM];
         for (int c = 0; c < O1_NCTX; c++) {
             for (int s = 0; s < O1T_NSYM; s++) 
                 normc[s] = static_cast<int16_t>(nf[c * O1T_NSYM + s]);
 
-            dt[c] = static_cast<FSE_DTable *>(malloc(dtsz * sizeof(FSE_DTable)));
+            dt[c] = dt_storage + static_cast<size_t>(c) * dtsz;
             FSE_buildDTable(dt[c], normc, O1T_NSYM - 1, O1T_PB);
         }
         const O1Lut &L = o1_lut();
@@ -748,9 +761,7 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
                 prev[k] = code; 
             } 
         }
-        for (int c = 0; c < O1_NCTX; c++) 
-            free(dt[c]);
-        free(dt); free(nf); free(ovf);
+        free(dt_storage); free(nf); free(ovf);
         return out;
     }
 
