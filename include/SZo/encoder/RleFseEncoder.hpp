@@ -314,12 +314,8 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
 
     // ---- order-1 model constants (context buckets + tANS byte alphabet) ----
     static constexpr int O1_NCTX = 15;
-    static constexpr int O1T_PB = 13;                  // tANS: FSE tableLog. 2048 states taxed the long-tail
-                                                       // 256-symbol alphabet ~8.5% payload (each rare symbol
-                                                       // holds >=1/2048 of code space); 8192 states cut that to
-                                                       // ~2% at identical speed. Needs the vendored zfse
-                                                       // (FSE_MAX_MEMORY_USAGE=15); system libzstd caps at 11.
-    static constexpr uint32_t O1T_M = 1u << O1T_PB;    // 2048
+    static constexpr int O1T_PB = 13;
+    static constexpr uint32_t O1T_M = 1u << O1T_PB;
     static constexpr int O1T_NSYM = 256;               // tANS: FSE byte alphabet; 255 = escape (|code|>=128)
     static inline int o1_unzz(uint32_t z) { return ((z >> 1) ^ (~(z & 1) + 1)); }   // inverse zigzag (decode side)
 
@@ -365,6 +361,23 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
         static const O1Lut t; 
         return t; 
     }
+
+    // static bool o1_fse_selftest() {
+    //     int16_t norm[2];
+    //     norm[0] = 1;
+    //     norm[1] = static_cast<int16_t>(O1T_M - 1);
+    //     FSE_CTable *ct = static_cast<FSE_CTable *>(malloc(FSE_CTABLE_SIZE_U32(O1T_PB, 1) * sizeof(FSE_CTable)));
+    //     size_t r = FSE_buildCTable(ct, norm, 1, O1T_PB);
+    //     free(ct);
+    //     if (FSE_isError(r)) {
+    //         std::fprintf(stderr,
+    //             "SZo o1tans: FSE_buildCTable self-test failed: tableLog %d exceeds the linked FSE "
+    //             "build. This binary must compile the vendored zfse sources (see "
+    //             "tools/szo/CMakeLists.txt), not resolve FSE_* from libzstd.\n", O1T_PB);
+    //         std::abort();
+    //     }
+    //     return true;
+    // }
 
     static void o1_normalize(const uint32_t *cnt, uint16_t *freq, int nsym = O1T_NSYM, int Mval = O1T_M) {
         uint64_t total = 0; 
@@ -807,6 +820,8 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
     //     derive(bins, num_bin, stateNum);
     // }
     void preprocess_encode(const T *bins, size_t num_bin, int stateNum) {
+        // static const bool fse_ok = o1_fse_selftest();   // link self-test (tableLog vs linked FSE); uncomment to re-arm
+        // (void)fse_ok;
         // (void)stateNum;
         mode_ = 0; lo_ = 0;
         // ONE windowed sample (256 windows x 32 contiguous) -> two signals:
@@ -847,7 +862,7 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
         // once that table is a small fraction (<=~10%) of the stream; for smaller inputs the
         // table-free RLE+FSE path (method 0) is both smaller AND can't overflow the compress
         // buffer (which is sized from the input), so fall back to it.
-        if (num_bin < static_cast<size_t>(10) * O1_NCTX * O1T_NSYM) method_ = 0;
+        if (num_bin < static_cast<size_t>(20) * O1_NCTX * O1T_NSYM) method_ = 0;
         scan_avx_ = (p0 >= 0.85);
     }
 
@@ -930,6 +945,8 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
 
     T *decode(const uchar *&bytes, size_t N) override {
         T *out;
+        // static const bool fse_ok = o1_fse_selftest();   // link self-test (tableLog vs linked FSE); uncomment to re-arm
+        // (void)fse_ok;
         if (method_ == 1) out = decode_o1tans(bytes, N);
         // else if (method_ == 2) out = decode_rle_adt(bytes, N);
         // else if (method_ == 3) out = decode_adt(bytes, N);

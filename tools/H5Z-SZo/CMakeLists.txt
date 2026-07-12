@@ -9,8 +9,18 @@ find_package(HDF5 COMPONENTS C REQUIRED)
 #message("HDF5LIB PATH:" ${HDF5_LIBRARIES})
 #message("HDF5INCLUDE PATH:" ${HDF5_INCLUDE_DIRS})
 
+# Vendored standalone FSE (entropy coder) — compiled into the filter so FSE_*
+# resolve to our own source: system libzstd caps FSE_MAX_TABLELOG at 11, while
+# the o1tans context tables use tableLog 13. Hidden visibility keeps the FSE_*
+# symbols local to this .so (internal calls bind at link time, no libzstd
+# interposition, nothing exported).
+file(GLOB ZFSE_SOURCES "${CMAKE_SOURCE_DIR}/include/SZo/encoder/zfse/*.c")
+set_source_files_properties(${ZFSE_SOURCES} PROPERTIES
+    COMPILE_OPTIONS "-fvisibility=hidden")
+
 add_library(hdf5szo
         src/H5Z_SZo.cpp
+        ${ZFSE_SOURCES}
 )
 
 target_link_libraries(hdf5szo
