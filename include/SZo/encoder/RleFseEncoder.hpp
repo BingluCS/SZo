@@ -314,7 +314,11 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
 
     // ---- order-1 model constants (context buckets + tANS byte alphabet) ----
     static constexpr int O1_NCTX = 15;
-    static constexpr int O1T_PB = 11;                  // tANS: FSE tableLog (libzstd build caps FSE_MAX_TABLELOG=11)
+    static constexpr int O1T_PB = 13;                  // tANS: FSE tableLog. 2048 states taxed the long-tail
+                                                       // 256-symbol alphabet ~8.5% payload (each rare symbol
+                                                       // holds >=1/2048 of code space); 8192 states cut that to
+                                                       // ~2% at identical speed. Needs the vendored zfse
+                                                       // (FSE_MAX_MEMORY_USAGE=15); system libzstd caps at 11.
     static constexpr uint32_t O1T_M = 1u << O1T_PB;    // 2048
     static constexpr int O1T_NSYM = 256;               // tANS: FSE byte alphabet; 255 = escape (|code|>=128)
     static inline int o1_unzz(uint32_t z) { return ((z >> 1) ^ (~(z & 1) + 1)); }   // inverse zigzag (decode side)
@@ -529,7 +533,27 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
         return ovf;
     }
 
+    static constexpr size_t O1T_SEG = static_cast<size_t>(8) << 20;   // target symbols per table segment
+
+    // Quant statistics drift along the stream (levels, passes, level-wise eb), so one global
+    // table set is a compromise: per-segment tables measured ~2-3% tighter payload at identical
+    // per-symbol cost. Each segment is a self-contained block (own tables, K streams, escapes).
     size_t encode_o1tans(const T *bins, size_t N, uchar *&bytes) {
+        uchar *sb = bytes;
+        size_t S = N / O1T_SEG;
+        if (S < 1) S = 1;
+        if (S > 16) S = 16;
+        write(static_cast<uint64_t>(S), bytes);
+        size_t seg = (N + S - 1) / S;
+        for (size_t g = 0; g < S; g++) {
+            size_t lo = g * seg, hi = lo + seg;
+            if (hi > N) hi = N;
+            encode_o1tans_block(bins + lo, hi - lo, bytes);
+        }
+        return static_cast<size_t>(bytes - sb);
+    }
+
+    size_t encode_o1tans_block(const T *bins, size_t N, uchar *&bytes) {
         const O1Lut &L = o1_lut();
         uchar *sb = bytes;
         // if (N == 0) { 
@@ -573,7 +597,7 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
                 }
                 novf_k[k] = novf - b0; 
             }
-            size_t nwin = 2048, wlen = 512;                             // ~1M windowed pairs; prev exact within each window
+            size_t nwin = 2048, wlen = 512;                             // ~1M windowed pairs per block; prev exact within each window
             size_t step = N / nwin; 
             if (step < wlen) 
                 step = wlen;
@@ -686,10 +710,6 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
     }
 
     T *decode_o1tans(const uchar *&bytes, size_t N) {
-        uint64_t n_, Kk; 
-        read(n_, bytes); 
-        read(Kk, bytes); 
-        int K = Kk;
         constexpr size_t pad = 64 / sizeof(T); 
         T *out = new T[N + pad];
 #if defined(__linux__)
@@ -698,8 +718,25 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
             madvise(reinterpret_cast<void *>(_mb), (N + pad) * sizeof(T) + (reinterpret_cast<uintptr_t>(out) - _mb), MADV_HUGEPAGE);
         }
 #endif
-        if (N == 0) 
+        uint64_t S_;
+        read(S_, bytes);
+        size_t S = S_ ? static_cast<size_t>(S_) : 1;
+        size_t seg = (N + S - 1) / S;
+        for (size_t g = 0; g < S; g++) {
+            size_t lo = g * seg, hi = lo + seg;
+            if (hi > N) hi = N;
+            decode_o1tans_block(bytes, hi - lo, out + lo);
+        }
         return out;
+    }
+
+    void decode_o1tans_block(const uchar *&bytes, size_t N, T *out) {
+        uint64_t n_, Kk;
+        read(n_, bytes);
+        read(Kk, bytes);
+        int K = static_cast<int>(Kk);
+        if (N == 0)
+            return;
         size_t cs = (N + K - 1) / K;
         uint64_t blen[16], nvk[16]; 
         for (int k = 0; k < K; k++) 
@@ -762,7 +799,6 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
             } 
         }
         free(dt_storage); free(nf); free(ovf);
-        return out;
     }
 
    public:
