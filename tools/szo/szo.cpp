@@ -35,7 +35,8 @@ inline void usage() {
     printf("* data type:\n");
     printf("	-f: single precision (float type)\n");
     printf("	-d: double precision (double type)\n");
-    printf("	-I <width>: integer type (width = 32 or 64)\n");
+    printf("	-I <width>: signed integer type (width = 16, 32, or 64)\n");
+    printf("	-U <width>: unsigned integer type (width = 16, 32, or 64)\n");
     printf("* configuration file: \n");
     printf("	-c <configuration file> : configuration file sz.config\n");
     printf("* error control: (the error control parameters here will overwrite the setting in sz.config)\n");
@@ -84,6 +85,8 @@ inline void usage_sz2() {
     printf("* data type:\n");
     printf("	-f: single precision (float type)\n");
     printf("	-d: double precision (double type)\n");
+    printf("	-I <width>: signed integer type (width = 16, 32, or 64)\n");
+    printf("	-U <width>: unsigned integer type (width = 16, 32, or 64)\n");
     printf("* configuration file: \n");
     printf("	-c <configuration file> : configuration file sz.config\n");
     printf("* error control: (the error control parameters here will overwrite the setting in sz.config)\n");
@@ -285,10 +288,26 @@ int main(int argc, char *argv[]) {
                 if (++i == argc || sscanf(argv[i], "%d", &width) != 1) {
                     usage();
                 }
-                if (width == 32) {
+                if (width == 16) {
+                    dataType = SZ_INT16;
+                } else if (width == 32) {
                     dataType = SZ_INT32;
                 } else if (width == 64) {
                     dataType = SZ_INT64;
+                } else {
+                    usage();
+                }
+                break;
+            case 'U':
+                if (++i == argc || sscanf(argv[i], "%d", &width) != 1) {
+                    usage();
+                }
+                if (width == 16) {
+                    dataType = SZ_UINT16;
+                } else if (width == 32) {
+                    dataType = SZ_UINT32;
+                } else if (width == 64) {
+                    dataType = SZ_UINT64;
                 } else {
                     usage();
                 }
@@ -460,8 +479,16 @@ int main(int argc, char *argv[]) {
 // #if (!SZo_DEBUG_TIMINGS)
         } else if (dataType == SZ_DOUBLE) {
             compress<double>(inPath, cmpPath, conf);
+        } else if (dataType == SZ_UINT16) {
+            compress<uint16_t>(inPath, cmpPath, conf);
+        } else if (dataType == SZ_INT16) {
+            compress<int16_t>(inPath, cmpPath, conf);
+        } else if (dataType == SZ_UINT32) {
+            compress<uint32_t>(inPath, cmpPath, conf);
         } else if (dataType == SZ_INT32) {
             compress<int32_t>(inPath, cmpPath, conf);
+        } else if (dataType == SZ_UINT64) {
+            compress<uint64_t>(inPath, cmpPath, conf);
         } else if (dataType == SZ_INT64) {
             compress<int64_t>(inPath, cmpPath, conf);
 // #endif
@@ -483,8 +510,16 @@ int main(int argc, char *argv[]) {
 //#if (!SZo_DEBUG_TIMINGS)
         } else if (dataType == SZ_DOUBLE) {
             decompress<double>(inPath, cmpPath, decPath, conf, binaryOutput, printCmpResults);
+        } else if (dataType == SZ_UINT16) {
+            decompress<uint16_t>(inPath, cmpPath, decPath, conf, binaryOutput, printCmpResults);
+        } else if (dataType == SZ_INT16) {
+            decompress<int16_t>(inPath, cmpPath, decPath, conf, binaryOutput, printCmpResults);
+        } else if (dataType == SZ_UINT32) {
+            decompress<uint32_t>(inPath, cmpPath, decPath, conf, binaryOutput, printCmpResults);
         } else if (dataType == SZ_INT32) {
             decompress<int32_t>(inPath, cmpPath, decPath, conf, binaryOutput, printCmpResults);
+        } else if (dataType == SZ_UINT64) {
+            decompress<uint64_t>(inPath, cmpPath, decPath, conf, binaryOutput, printCmpResults);
         } else if (dataType == SZ_INT64) {
             decompress<int64_t>(inPath, cmpPath, decPath, conf, binaryOutput, printCmpResults);
 //#endif

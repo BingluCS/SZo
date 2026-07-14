@@ -8,6 +8,8 @@
 #include "Config.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <type_traits>
 
 #ifdef _OPENMP
@@ -23,6 +25,19 @@
 #endif
 
 namespace SZo {
+
+template <class T>
+ALWAYS_INLINE double statistic_difference(T lhs, T rhs) {
+    if constexpr (std::is_integral_v<T>) {
+        using Unsigned = std::make_unsigned_t<T>;
+        const Unsigned ulhs = static_cast<Unsigned>(lhs);
+        const Unsigned urhs = static_cast<Unsigned>(rhs);
+        const Unsigned magnitude = lhs < rhs ? urhs - ulhs : ulhs - urhs;
+        const double difference = static_cast<double>(magnitude);
+        return lhs < rhs ? -difference : difference;
+    }
+    return static_cast<double>(lhs) - static_cast<double>(rhs);
+}
 
 template <class T>
 inline void scalar_minmax(const T *data, size_t begin, size_t end, T &out_min, T &out_max) {
@@ -252,16 +267,18 @@ double autocorrelation1DLag1(const Type *data, size_t numOfElem, Type avg) {
 template <typename Type>
 void verify(Type *ori_data, Type *data, size_t num_elements, double &psnr, double &nrmse, double &max_diff) {
     size_t i = 0;
-    double Max = ori_data[0];
-    double Min = ori_data[0];
-    max_diff = fabs(data[0] - ori_data[0]);
+    Type Max = ori_data[0];
+    Type Min = ori_data[0];
+    max_diff = fabs(statistic_difference(data[0], ori_data[0]));
     double diff_sum = 0;
     double maxpw_relerr = 0;
     double sum1 = 0, sum2 = 0, l2sum = 0;
     for (i = 0; i < num_elements; i++) {
-        sum1 += ori_data[i];
-        sum2 += data[i];
-        l2sum += data[i] * data[i];
+        const double original = static_cast<double>(ori_data[i]);
+        const double reconstructed = static_cast<double>(data[i]);
+        sum1 += original;
+        sum2 += reconstructed;
+        l2sum += reconstructed * reconstructed;
     }
     double mean1 = sum1 / num_elements;
     double mean2 = sum2 / num_elements;
@@ -272,20 +289,22 @@ void verify(Type *ori_data, Type *data, size_t num_elements, double &psnr, doubl
     double *diff = static_cast<double *>(malloc(num_elements * sizeof(double)));
 
     for (i = 0; i < num_elements; i++) {
-        diff[i] = data[i] - ori_data[i];
-        diff_sum += data[i] - ori_data[i];
+        const double original = static_cast<double>(ori_data[i]);
+        const double reconstructed = static_cast<double>(data[i]);
+        diff[i] = statistic_difference(data[i], ori_data[i]);
+        diff_sum += diff[i];
         if (Max < ori_data[i]) Max = ori_data[i];
         if (Min > ori_data[i]) Min = ori_data[i];
-        double err = fabs(data[i] - ori_data[i]);
+        double err = fabs(diff[i]);
         if (ori_data[i] != 0) {
-            relerr = err / fabs(ori_data[i]);
+            relerr = err / fabs(original);
             if (maxpw_relerr < relerr) maxpw_relerr = relerr;
         }
 
         if (max_diff < err) max_diff = err;
-        prodSum += (ori_data[i] - mean1) * (data[i] - mean2);
-        sum3 += (ori_data[i] - mean1) * (ori_data[i] - mean1);
-        sum4 += (data[i] - mean2) * (data[i] - mean2);
+        prodSum += (original - mean1) * (reconstructed - mean2);
+        sum3 += (original - mean1) * (original - mean1);
+        sum4 += (reconstructed - mean2) * (reconstructed - mean2);
         sum += err * err;
     }
     double std1 = sqrt(sum3 / num_elements);
@@ -294,16 +313,32 @@ void verify(Type *ori_data, Type *data, size_t num_elements, double &psnr, doubl
     double acEff = ee / std1 / std2;
 
     double mse = sum / num_elements;
-    double range = Max - Min;
-    psnr = 20 * log10(range) - 10 * log10(mse);
-    nrmse = sqrt(mse) / range;
+    double range = fabs(statistic_difference(Max, Min));
+    if (mse == 0) {
+        psnr = std::numeric_limits<double>::infinity();
+        nrmse = 0;
+    } else {
+        psnr = 20 * log10(range) - 10 * log10(mse);
+        nrmse = sqrt(mse) / range;
+    }
 
     double normErr = sqrt(sum);
     double normErr_norm = normErr / sqrt(l2sum);
 
-    printf("Min=%.20G, Max=%.20G, range=%.20G\n", Min, Max, range);
+    if constexpr (std::is_integral_v<Type>) {
+        if constexpr (std::is_signed_v<Type>) {
+            printf("Min=%lld, Max=%lld, range=%.20G\n", static_cast<long long>(Min),
+                   static_cast<long long>(Max), range);
+        } else {
+            printf("Min=%llu, Max=%llu, range=%.20G\n", static_cast<unsigned long long>(Min),
+                   static_cast<unsigned long long>(Max), range);
+        }
+    } else {
+        printf("Min=%.20G, Max=%.20G, range=%.20G\n", static_cast<double>(Min),
+               static_cast<double>(Max), range);
+    }
     printf("Max absolute error = %.2G\n", max_diff);
-    printf("Max relative error = %.2G\n", max_diff / (Max - Min));
+    printf("Max relative error = %.2G\n", range > 0 ? max_diff / range : 0);
     printf("Max pw relative error = %.2G\n", maxpw_relerr);
     printf("PSNR = %f, NRMSE= %.10G\n", psnr, nrmse);
     printf("normError = %f, normErr_norm = %f\n", normErr, normErr_norm);
