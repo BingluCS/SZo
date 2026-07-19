@@ -21,6 +21,7 @@ class BuildSZoExtension(_build_ext):
 
     def run(self):
         szo_dir = self.download_and_build_szo()
+        self.szo_dir = szo_dir
 
         for ext in self.extensions:
             ext.include_dirs.insert(0, str(szo_dir / "include"))
@@ -29,6 +30,16 @@ class BuildSZoExtension(_build_ext):
             ext.library_dirs.append(str(szo_dir / "build" / "tools" / "zstd"))
             ext.library_dirs.append(str(szo_dir / "build" / "tools" / "zstd" / "Release"))
             ext.library_dirs.append(str(szo_dir / "build" / "tools" / "zstd" / "Debug"))
+
+            if ext.name == "pyszo.szo":
+                # RleFseEncoder uses SZo's vendored standalone FSE.  Do not resolve
+                # these private FSE_* symbols from whichever libzstd Python happens
+                # to load; its internal ABI is neither exported nor stable.
+                zfse_dir = szo_dir / "include" / "SZo" / "encoder" / "zfse"
+                zfse_sources = sorted(str(source) for source in zfse_dir.glob("*.c"))
+                if not zfse_sources:
+                    raise RuntimeError(f"No vendored FSE sources found in {zfse_dir}")
+                self.zfse_sources = zfse_sources
 
         super().run()
 
@@ -48,6 +59,29 @@ class BuildSZoExtension(_build_ext):
                     shutil.copy2(zstd_lib, package_dir / zstd_lib.name)
                     print(f"Copied {zstd_lib.name} to package")
                     break
+
+    def build_extensions(self):
+        zfse_sources = getattr(self, "zfse_sources", [])
+        if zfse_sources:
+            if sys.platform == "win32":
+                compile_args = ["/O2"]
+            else:
+                compile_args = ["-O3", "-fvisibility=hidden"]
+            zfse_objects = self.compiler.compile(
+                zfse_sources,
+                output_dir=self.build_temp,
+                include_dirs=[str(self.szo_dir / "include" / "SZo" / "encoder" / "zfse")],
+                extra_postargs=compile_args,
+            )
+            for ext in self.extensions:
+                if ext.name == "pyszo.szo":
+                    if ext.extra_objects is None:
+                        ext.extra_objects = []
+                    ext.extra_objects.extend(
+                        obj for obj in zfse_objects if obj not in ext.extra_objects
+                    )
+
+        super().build_extensions()
 
     def download_and_build_szo(self):
         build_temp = Path(self.build_temp).absolute()
@@ -171,8 +205,8 @@ def create_extensions():
             libraries=libraries,
             library_dirs=library_dirs,
             language='c++',
-            extra_compile_args=extra_compile_args,
-            extra_link_args=extra_link_args,
+            extra_compile_args=list(extra_compile_args),
+            extra_link_args=list(extra_link_args),
         ),
         Extension(
             "pyszo.szo",
@@ -181,8 +215,8 @@ def create_extensions():
             libraries=libraries,
             library_dirs=library_dirs,
             language='c++',
-            extra_compile_args=extra_compile_args,
-            extra_link_args=extra_link_args,
+            extra_compile_args=list(extra_compile_args),
+            extra_link_args=list(extra_link_args),
         ),
     ]
     
