@@ -2361,7 +2361,7 @@ namespace SZo {
             svfloat32_t err_dequan = svsub_f32_x(pg, decompressed, ori_sve);
 
             pg_in_range = svand_b_z(pg, svcmpge_n_f32(pg, err_dequan, -real_eb), svcmple_n_f32(pg, err_dequan, real_eb));
-            quant_sve = svsel_f32(pg_in_range, quant_sve, svdup_n_f32(-(float)radius));
+            quant_sve = svsel_f32(pg_in_range, quant_sve, svdup_n_f32(-static_cast<float>(radius)));
     }
 
     template <TUNING Tuning, class T, uint N, class Quantizer>
@@ -2381,168 +2381,136 @@ namespace SZo {
         svfloat64_t err_dequan = svsub_f64_x(pg64, decompressed, ori_sve);
 
         pg_in_range = svand_b_z(pg64, svcmpge_n_f64(pg64, err_dequan, -real_eb), svcmple_n_f64(pg64, err_dequan, real_eb));
-        quant_sve = svsel_f64(pg_in_range, quant_sve, svdup_n_f64(-(double)radius));
+        quant_sve = svsel_f64(pg_in_range, quant_sve, svdup_n_f64(-static_cast<double>(radius)));
     }
 
     template <TUNING Tuning, class T, uint N, class Quantizer>
     template <COMPMODE CompMode, bool FullOnly, bool SkipOverwrite, typename U, typename>
     ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::quantize_float (svfloat32_t& sum, size_t& start, T*& data, size_t& offset,
         size_t& len, const size_t& step, svbool_t& pg, svbool_t& pg64) {
+        const size_t processed = FullOnly ? step : std::min(step, len - start);
+        svbool_t active_pg = pg;
+        svbool_t low_pg64 = pg64;
+        svbool_t high_pg64 = pg64;
+        if constexpr (!FullOnly) {
+            active_pg = svwhilelt_b32(static_cast<uint64_t>(0), static_cast<uint64_t>(processed));
+            low_pg64 = svwhilelt_b64(
+                static_cast<uint64_t>(0), static_cast<uint64_t>((processed + 1) >> 1));
+            high_pg64 = svwhilelt_b64(
+                static_cast<uint64_t>(0), static_cast<uint64_t>(processed >> 1));
+        }
+
         if constexpr (CompMode == COMPMODE::COMP) {
-            T ori[step];
-            size_t base = start * offset;
-
             svfloat32_t ori_sve;
-            if constexpr (FullOnly) {
-                if (offset == 1) {
-                    ori_sve = svld1(pg, data + start);   // contiguous: SIMD load straight (ori[] filled lazily on escape)
-                } else {
-                    #pragma unroll
-                    for (size_t j = 0; j < step; ++j) ori[j] = data[base + j * offset];
-                    ori_sve = svld1(pg, ori);
-                }
+            if (offset == 1) {
+                ori_sve = svld1_f32(active_pg, data + start);
             } else {
-                // tail: clamp past-end indices to the last valid element (avoid OOB read)
-                for (size_t j = 0; j < step; ++j) {
-                    size_t idx = (start + j < len) ? (start + j) : (len - 1);
-                    ori[j] = data[idx * offset];
-                }
-                ori_sve = svld1(pg, ori);
+                const svuint32_t indices = svmul_n_u32_x(
+                    active_pg, svindex_u32(static_cast<uint32_t>(start), 1),
+                    static_cast<uint32_t>(offset));
+                ori_sve = svld1_gather_u32index_f32(active_pg, data, indices);
             }
-            svfloat32_t quant_sve = svsub_f32_x(pg, ori_sve, sum); // prediction error
+            svfloat32_t quant_sve = svsub_f32_x(active_pg, ori_sve, sum);
 
-            T tmp[step];
-            int quant_vals[step];
+            svfloat64_t quant_even_f64 = svcvt_f64_f32_x(low_pg64, quant_sve);
+            svfloat64_t quant_odd_f64 = svcvtlt_f64_f32_x(high_pg64, quant_sve);
+            quant_even_f64 = svrintn_f64_x(
+                low_pg64, svmul_n_f64_x(low_pg64, quant_even_f64, real_ebx2_r));
+            quant_odd_f64 = svrintn_f64_x(
+                high_pg64, svmul_n_f64_x(high_pg64, quant_odd_f64, real_ebx2_r));
 
-            // calculate quantization code
-            svfloat64_t quant_even_f64 = svcvt_f64_f32_x(pg64, quant_sve);
-            svfloat64_t quant_odd_f64  = svcvtlt_f64_f32_x(pg64, quant_sve);
-            quant_even_f64 = svrintn_f64_x(pg64, svmul_n_f64_x(pg64, quant_even_f64, real_ebx2_r));
-            quant_odd_f64  = svrintn_f64_x(pg64, svmul_n_f64_x(pg64, quant_odd_f64, real_ebx2_r));
-
-            svbool_t pg_gt_neg = svcmpgt_n_f64(pg64, quant_even_f64, -radius); // val > -radius
-            svbool_t pg_lt_pos = svcmplt_n_f64(pg64, quant_even_f64,  radius); // val < +radius
-            svbool_t pg_in_range = svand_b_z(pg64, pg_gt_neg, pg_lt_pos);
+            svbool_t pg_gt_neg = svcmpgt_n_f64(low_pg64, quant_even_f64, -radius);
+            svbool_t pg_lt_pos = svcmplt_n_f64(low_pg64, quant_even_f64, radius);
+            svbool_t pg_in_range = svand_b_z(low_pg64, pg_gt_neg, pg_lt_pos);
             quant_even_f64 = svsel_f64(pg_in_range, quant_even_f64, svdup_n_f64(0.0));
 
-            svbool_t pg_gt_neg_o = svcmpgt_n_f64(pg64, quant_odd_f64, -radius);
-            svbool_t pg_lt_pos_o = svcmplt_n_f64(pg64, quant_odd_f64,  radius);
-            svbool_t pg_in_range_o = svand_b_z(pg64, pg_gt_neg_o, pg_lt_pos_o);
+            svbool_t pg_gt_neg_o = svcmpgt_n_f64(high_pg64, quant_odd_f64, -radius);
+            svbool_t pg_lt_pos_o = svcmplt_n_f64(high_pg64, quant_odd_f64, radius);
+            svbool_t pg_in_range_o = svand_b_z(high_pg64, pg_gt_neg_o, pg_lt_pos_o);
             quant_odd_f64 = svsel_f64(pg_in_range_o, quant_odd_f64, svdup_n_f64(0.0));
 
-            // dequantization for decompression
-            svfloat64_t decompressed_even_f64 = svmla_f64_x(pg64, svcvt_f64_f32_x(pg64, sum),
-                    quant_even_f64, svdup_f64(real_ebx2));
-            svfloat64_t decompressed_odd_f64  = svmla_f64_x(pg64, svcvtlt_f64_f32_x(pg64, sum),
-                    quant_odd_f64, svdup_f64(real_ebx2));
+            svfloat64_t decompressed_even_f64 = svmla_n_f64_x(
+                low_pg64, svcvt_f64_f32_x(low_pg64, sum), quant_even_f64, real_ebx2);
+            svfloat64_t decompressed_odd_f64 = svmla_n_f64_x(
+                high_pg64, svcvtlt_f64_f32_x(high_pg64, sum), quant_odd_f64, real_ebx2);
 
-            svfloat32_t decompressed = svcvt_f32_f64_x(pg64, decompressed_even_f64);
-            decompressed = svcvtnt_f32_f64_x(decompressed, pg64, decompressed_odd_f64);
+            svfloat32_t decompressed = svcvt_f32_f64_x(low_pg64, decompressed_even_f64);
+            decompressed = svcvtnt_f32_f64_x(decompressed, high_pg64, decompressed_odd_f64);
 
-            svst1_f32(pg, tmp, decompressed);
+            quant_sve = svcvt_f32_f64_x(low_pg64, quant_even_f64);
+            quant_sve = svcvtnt_f32_f64_x(quant_sve, high_pg64, quant_odd_f64);
 
-            quant_sve = svcvt_f32_f64_x(pg64, quant_even_f64);
-            quant_sve = svcvtnt_f32_f64_x(quant_sve, pg64, quant_odd_f64);
+            const svfloat32_t err_dequan = svsub_f32_x(active_pg, decompressed, ori_sve);
+            pg_in_range = svand_b_z(
+                active_pg, svcmpge_n_f32(active_pg, err_dequan, -real_eb),
+                svcmple_n_f32(active_pg, err_dequan, real_eb));
+            quant_sve = svsel_f32(pg_in_range, quant_sve, svdup_n_f32(-static_cast<float>(radius)));
 
-            svfloat32_t err_dequan = svsub_f32_x(pg, decompressed, ori_sve);
-
-            pg_in_range = svand_b_z(pg, svcmpge_n_f32(pg, err_dequan, -real_eb), svcmple_n_f32(pg, err_dequan, real_eb));
-            quant_sve = svsel_f32(pg_in_range, quant_sve, svdup_n_f32(-(float)radius));
-
-            svint32_t quant_sve_i = svcvt_s32_f32_z(pg, quant_sve);
-            svst1(pg, quant_vals, quant_sve_i);
-            size_t j;
-            if constexpr (FullOnly) {
+            const svint32_t quant_sve_i = svcvt_s32_f32_z(active_pg, quant_sve);
+            const svbool_t esc_pred = svcmpeq_n_s32(active_pg, quant_sve_i, -32768);
+            if constexpr (!SkipOverwrite) {
+                const svfloat32_t stored = svsel_f32(esc_pred, ori_sve, decompressed);
                 if (offset == 1) {
-                    // contiguous full: SIMD store, escape lanes -> original
-                    svbool_t esc_pred = svcmpeq_n_s32(pg, quant_sve_i, -32768);
-                    if constexpr (!SkipOverwrite) {
-                        svst1_f32(pg, data + start, svsel_f32(esc_pred, ori_sve, decompressed));
-                    }
-                    if (svptest_any(pg, esc_pred)) {
-                        svst1_f32(pg, ori, ori_sve);   // contiguous read left ori[] unfilled
-                        #pragma unroll
-                        for (size_t k = 0; k < step; ++k)
-                            if (quant_vals[k] == -32768) quantizer.force_save_unpred(ori[k]);
-                    }
+                    svst1_f32(active_pg, data + start, stored);
                 } else {
-                    // strided full: no per-lane bound check
-                    #pragma unroll
-                    for (size_t k = 0; k < step; ++k) {
-                        if (quant_vals[k] != -32768) {
-                            if constexpr (!SkipOverwrite) {
-                                data[(start + k) * offset] = tmp[k];
-                            }
-                        } else {
-                            quantizer.force_save_unpred(ori[k]);
-                        }
-                    }
+                    const svuint32_t indices = svmul_n_u32_x(
+                        active_pg, svindex_u32(static_cast<uint32_t>(start), 1),
+                        static_cast<uint32_t>(offset));
+                    svst1_scatter_u32index_f32(active_pg, data, indices, stored);
                 }
-                j = step;
-            } else {
-                j = 0;
-                #pragma unroll
-                for ( ; j < step && start + j < len; ++j) {
-                    if (quant_vals[j] != -32768) {
-                        if constexpr (!SkipOverwrite) {
-                            data[(start + j) * offset] = tmp[j];
-                        }
-                    } else {
-                        quantizer.force_save_unpred(ori[j]);
+            }
+            if (svptest_any(active_pg, esc_pred)) {
+                T ori[step];
+                int quant_vals[step];
+                svst1_f32(active_pg, ori, ori_sve);
+                svst1_s32(active_pg, quant_vals, quant_sve_i);
+                for (size_t k = 0; k < processed; ++k) {
+                    if (quant_vals[k] == -32768) {
+                        quantizer.force_save_unpred(ori[k]);
                     }
                 }
             }
-
-            svst1h_s32(pg, quant_inds + quant_index, quant_sve_i);
-            quant_index += j;
+            svst1h_s32(active_pg, quant_inds + quant_index, quant_sve_i);
+            quant_index += processed;
         }
-        else if constexpr (CompMode == COMPMODE::DECOMP) { // decomp
-            svint32_t quant_sve_i = svld1sh_s32(pg, quant_inds + quant_index);
-            int quant_vals[step];
-            svst1(pg, quant_vals, quant_sve_i);
+        else if constexpr (CompMode == COMPMODE::DECOMP) {
+            const svint32_t quant_sve_i =
+                svld1sh_s32(active_pg, quant_inds + quant_index);
+            svfloat64_t decompressed_even_f64 =
+                svcvt_f64_s32_x(low_pg64, quant_sve_i);
+            svfloat64_t decompressed_odd_f64 = svcvtlt_f64_f32_x(
+                high_pg64, svcvt_f32_s32_x(active_pg, quant_sve_i));
+            decompressed_even_f64 = svmla_n_f64_x(
+                low_pg64, svcvt_f64_f32_x(low_pg64, sum),
+                decompressed_even_f64, real_ebx2);
+            decompressed_odd_f64 = svmla_n_f64_x(
+                high_pg64, svcvtlt_f64_f32_x(high_pg64, sum),
+                decompressed_odd_f64, real_ebx2);
+            svfloat32_t decompressed =
+                svcvt_f32_f64_x(low_pg64, decompressed_even_f64);
+            decompressed =
+                svcvtnt_f32_f64_x(decompressed, high_pg64, decompressed_odd_f64);
 
-            svfloat64_t decompressed_even_f64 = svcvt_f64_s32_x(pg64, quant_sve_i);
-            svfloat64_t decompressed_odd_f64  = svcvtlt_f64_f32_x(pg64, svcvt_f32_s32_x(pg, quant_sve_i));
-
-            decompressed_even_f64 = svmla_f64_x(pg64, svcvt_f64_f32_x(pg64, sum), decompressed_even_f64, svdup_f64(real_ebx2));
-            decompressed_odd_f64 = svmla_f64_x(pg64, svcvtlt_f64_f32_x(pg64, sum), decompressed_odd_f64, svdup_f64(real_ebx2));
-
-            svfloat32_t decompressed = svcvt_f32_f64_x(pg64, decompressed_even_f64);
-            decompressed = svcvtnt_f32_f64_x(decompressed, pg64, decompressed_odd_f64);
-
-            // sum already folded into svmla_f64 above (decode aligned with encode)
-
-            T tmp[step];
-            svst1_f32(pg, tmp, decompressed);
-
-            size_t j;
-            if constexpr (FullOnly) {
-                if (offset == 1) {
-                    // contiguous full: SIMD store decompressed, then patch escape lanes
-                    svst1_f32(pg, data + start, decompressed);
-                    svbool_t esc_pred = svcmpeq_n_s32(pg, quant_sve_i, -32768);
-                    if (svptest_any(pg, esc_pred)) {
-                        #pragma unroll
-                        for (size_t k = 0; k < step; ++k)
-                            if (quant_vals[k] == -32768) data[start + k] = quantizer.recover_unpred();
-                    }
-                } else {
-                    #pragma unroll
-                    for (size_t k = 0; k < step; ++k) {
-                        if (quant_vals[k] != -32768) data[(start + k) * offset] = tmp[k];
-                        else data[(start + k) * offset] = quantizer.recover_unpred();
-                    }
-                }
-                j = step;
+            if (offset == 1) {
+                svst1_f32(active_pg, data + start, decompressed);
             } else {
-                j = 0;
-                #pragma unroll
-                for ( ; j < step && start + j < len; ++j) {
-                    if (quant_vals[j] != -32768) data[(start + j) * offset] = tmp[j];
-                    else data[(start + j) * offset] = quantizer.recover_unpred();
+                const svuint32_t indices = svmul_n_u32_x(
+                    active_pg, svindex_u32(static_cast<uint32_t>(start), 1),
+                    static_cast<uint32_t>(offset));
+                svst1_scatter_u32index_f32(active_pg, data, indices, decompressed);
+            }
+            const svbool_t esc_pred =
+                svcmpeq_n_s32(active_pg, quant_sve_i, -32768);
+            if (svptest_any(active_pg, esc_pred)) {
+                int quant_vals[step];
+                svst1_s32(active_pg, quant_vals, quant_sve_i);
+                for (size_t k = 0; k < processed; ++k) {
+                    if (quant_vals[k] == -32768) {
+                        data[(start + k) * offset] = quantizer.recover_unpred();
+                    }
                 }
             }
-            quant_index += j;
+            quant_index += processed;
         }
     }
 
@@ -2550,129 +2518,96 @@ namespace SZo {
     template <COMPMODE CompMode, bool FullOnly, bool SkipOverwrite, typename U, typename>
     ALWAYS_INLINE void InterpolationDecomposition<Tuning, T, N, Quantizer>::quantize_double (svfloat64_t& sum, size_t& start, T*& data, size_t& offset,
         size_t& len, const size_t& step, svbool_t& pg64) {
+        const size_t processed = FullOnly ? step : std::min(step, len - start);
+        svbool_t active_pg64 = pg64;
+        if constexpr (!FullOnly) {
+            active_pg64 =
+                svwhilelt_b64(static_cast<uint64_t>(0), static_cast<uint64_t>(processed));
+        }
+
         if constexpr (CompMode == COMPMODE::COMP) {
-            T ori[step];
-            size_t base = start * offset;
-
             svfloat64_t ori_sve;
-            if constexpr (FullOnly) {
-                if (offset == 1) {
-                    ori_sve = svld1(pg64, data + start);   // contiguous: SIMD load straight (ori[] filled lazily on escape)
-                } else {
-                    #pragma unroll
-                    for (size_t j = 0; j < step; ++j) ori[j] = data[base + j * offset];
-                    ori_sve = svld1(pg64, ori);
-                }
+            if (offset == 1) {
+                ori_sve = svld1_f64(active_pg64, data + start);
             } else {
-                // tail: clamp past-end indices to the last valid element (avoid OOB read)
-                for (size_t j = 0; j < step; ++j) {
-                    size_t idx = (start + j < len) ? (start + j) : (len - 1);
-                    ori[j] = data[idx * offset];
-                }
-                ori_sve = svld1(pg64, ori);
+                const svuint64_t indices = svmul_n_u64_x(
+                    active_pg64, svindex_u64(static_cast<uint64_t>(start), 1),
+                    static_cast<uint64_t>(offset));
+                ori_sve = svld1_gather_u64index_f64(active_pg64, data, indices);
             }
-            svfloat64_t quant_sve = svsub_f64_x(pg64, ori_sve, sum); // prediction error
-            T tmp[step];
-            int quant_vals[step];
+            svfloat64_t quant_sve = svsub_f64_x(active_pg64, ori_sve, sum);
+            quant_sve = svrintn_f64_x(
+                active_pg64,
+                svmul_n_f64_x(active_pg64, quant_sve, real_ebx2_r));
 
-            quant_sve = svrintn_f64_x(pg64, svmul_n_f64_x(pg64, quant_sve, real_ebx2_r));
-
-            svbool_t pg_gt_neg = svcmpgt_n_f64(pg64, quant_sve, -radius);
-            svbool_t pg_lt_pos = svcmplt_n_f64(pg64, quant_sve,  radius);
-            svbool_t pg_in_range = svand_b_z(pg64, pg_gt_neg, pg_lt_pos);
+            svbool_t pg_gt_neg = svcmpgt_n_f64(active_pg64, quant_sve, -radius);
+            svbool_t pg_lt_pos = svcmplt_n_f64(active_pg64, quant_sve, radius);
+            svbool_t pg_in_range = svand_b_z(active_pg64, pg_gt_neg, pg_lt_pos);
             quant_sve = svsel_f64(pg_in_range, quant_sve, svdup_n_f64(0.0));
 
-            svfloat64_t decompressed = svmla_f64_x(pg64, sum, quant_sve, svdup_f64(real_ebx2));
-            svst1_f64(pg64, tmp, decompressed);
-            svfloat64_t err_dequan = svsub_f64_x(pg64, decompressed, ori_sve);
+            const svfloat64_t decompressed =
+                svmla_n_f64_x(active_pg64, sum, quant_sve, real_ebx2);
+            const svfloat64_t err_dequan =
+                svsub_f64_x(active_pg64, decompressed, ori_sve);
+            pg_in_range = svand_b_z(
+                active_pg64, svcmpge_n_f64(active_pg64, err_dequan, -real_eb),
+                svcmple_n_f64(active_pg64, err_dequan, real_eb));
+            quant_sve = svsel_f64(pg_in_range, quant_sve, svdup_n_f64(-static_cast<double>(radius)));
 
-            pg_in_range = svand_b_z(pg64, svcmpge_n_f64(pg64, err_dequan, -real_eb), svcmple_n_f64(pg64, err_dequan, real_eb));
-            quant_sve = svsel_f64(pg_in_range, quant_sve, svdup_n_f64(-(double)radius));
-
-
-            svint64_t quant_sve_i = svcvt_s64_f64_x(pg64, quant_sve);
-
-            svst1w_s64(pg64, quant_vals, quant_sve_i);
-
-            size_t j;
-            if constexpr (FullOnly) {
+            const svint64_t quant_sve_i = svcvt_s64_f64_x(active_pg64, quant_sve);
+            const svbool_t esc_pred =
+                svcmpeq_n_s64(active_pg64, quant_sve_i, -32768);
+            if constexpr (!SkipOverwrite) {
+                const svfloat64_t stored = svsel_f64(esc_pred, ori_sve, decompressed);
                 if (offset == 1) {
-                    // contiguous full: SIMD store, escape lanes -> original
-                    svbool_t esc_pred = svcmpeq_n_s64(pg64, quant_sve_i, -32768);
-                    if constexpr (!SkipOverwrite) {
-                        svst1_f64(pg64, data + start, svsel_f64(esc_pred, ori_sve, decompressed));
-                    }
-                    if (svptest_any(pg64, esc_pred)) {
-                        svst1_f64(pg64, ori, ori_sve);   // contiguous read left ori[] unfilled
-                        #pragma unroll
-                        for (size_t k = 0; k < step; ++k)
-                            if (quant_vals[k] == -32768) quantizer.force_save_unpred(ori[k]);
-                    }
+                    svst1_f64(active_pg64, data + start, stored);
                 } else {
-                    #pragma unroll
-                    for (size_t k = 0; k < step; ++k) {
-                        if (quant_vals[k] != -32768) {
-                            if constexpr (!SkipOverwrite) {
-                                data[(start + k) * offset] = tmp[k];
-                            }
-                        } else {
-                            quantizer.force_save_unpred(ori[k]);
-                        }
-                    }
+                    const svuint64_t indices = svmul_n_u64_x(
+                        active_pg64, svindex_u64(static_cast<uint64_t>(start), 1),
+                        static_cast<uint64_t>(offset));
+                    svst1_scatter_u64index_f64(active_pg64, data, indices, stored);
                 }
-                j = step;
-            } else {
-                j = 0;
-                #pragma unroll
-                for ( ; j < step && start + j < len; ++j) {
-                    if (quant_vals[j] != -32768) {
-                        if constexpr (!SkipOverwrite) {
-                            data[(start + j) * offset] = tmp[j];
-                        }
-                    } else {
-                        quantizer.force_save_unpred(ori[j]);
+            }
+            if (svptest_any(active_pg64, esc_pred)) {
+                T ori[step];
+                int quant_vals[step];
+                svst1_f64(active_pg64, ori, ori_sve);
+                svst1w_s64(active_pg64, quant_vals, quant_sve_i);
+                for (size_t k = 0; k < processed; ++k) {
+                    if (quant_vals[k] == -32768) {
+                        quantizer.force_save_unpred(ori[k]);
                     }
                 }
             }
-            svst1h_s64(pg64, quant_inds + quant_index, quant_sve_i);
-            quant_index += j;
+            svst1h_s64(active_pg64, quant_inds + quant_index, quant_sve_i);
+            quant_index += processed;
         }
         else if constexpr (CompMode == COMPMODE::DECOMP) {
-            svint64_t quant_sve_i = svld1sh_s64(pg64, quant_inds + quant_index);
-            int quant_vals[step];
-            svst1w_s64(pg64, quant_vals, quant_sve_i);
-
-            svfloat64_t decompressed = svmla_f64_x(pg64, sum,
-                    svcvt_f64_s64_x(pg64, quant_sve_i), svdup_f64(real_ebx2));
-            T tmp[step];
-            svst1_f64(pg64, tmp, decompressed);
-            size_t j;
-            if constexpr (FullOnly) {
-                if (offset == 1) {
-                    svst1_f64(pg64, data + start, decompressed);
-                    svbool_t esc_pred = svcmpeq_n_s64(pg64, quant_sve_i, -32768);
-                    if (svptest_any(pg64, esc_pred)) {
-                        #pragma unroll
-                        for (size_t k = 0; k < step; ++k)
-                            if (quant_vals[k] == -32768) data[start + k] = quantizer.recover_unpred();
-                    }
-                } else {
-                    #pragma unroll
-                    for (size_t k = 0; k < step; ++k) {
-                        if (quant_vals[k] != -32768) data[(start + k) * offset] = tmp[k];
-                        else data[(start + k) * offset] = quantizer.recover_unpred();
-                    }
-                }
-                j = step;
+            const svint64_t quant_sve_i =
+                svld1sh_s64(active_pg64, quant_inds + quant_index);
+            const svfloat64_t decompressed = svmla_n_f64_x(
+                active_pg64, sum, svcvt_f64_s64_x(active_pg64, quant_sve_i),
+                real_ebx2);
+            if (offset == 1) {
+                svst1_f64(active_pg64, data + start, decompressed);
             } else {
-                j = 0;
-                #pragma unroll
-                for ( ; j < step && start + j < len; ++j) {
-                    if (quant_vals[j] != -32768) data[(start + j) * offset] = tmp[j];
-                    else data[(start + j) * offset] = quantizer.recover_unpred();
+                const svuint64_t indices = svmul_n_u64_x(
+                    active_pg64, svindex_u64(static_cast<uint64_t>(start), 1),
+                    static_cast<uint64_t>(offset));
+                svst1_scatter_u64index_f64(active_pg64, data, indices, decompressed);
+            }
+            const svbool_t esc_pred =
+                svcmpeq_n_s64(active_pg64, quant_sve_i, -32768);
+            if (svptest_any(active_pg64, esc_pred)) {
+                int quant_vals[step];
+                svst1w_s64(active_pg64, quant_vals, quant_sve_i);
+                for (size_t k = 0; k < processed; ++k) {
+                    if (quant_vals[k] == -32768) {
+                        data[(start + k) * offset] = quantizer.recover_unpred();
+                    }
                 }
             }
-            quant_index += j;
+            quant_index += processed;
         }
     }
 #else

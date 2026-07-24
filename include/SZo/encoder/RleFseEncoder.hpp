@@ -7,7 +7,7 @@
  * SZ interpolation quant streams are extremely peaked: the zero-error code
  * ("mode") covers ~99% of symbols and forms long spatial runs. This coder:
  *
- *   1. SIMD-scans mode runs (AVX2 cmpeq/movemask) — work scales with the number
+ *   1. SIMD-scans mode runs (AVX2 or SVE2) — work scales with the number
  *      of runs (~1% of N at loose bounds), not with N.
  *   2. Reparametrizes the stream as alternating [run-length L][non-mode value v].
  *   3. Codes L and zigzag(v-mode) each as Elias-gamma: a magnitude-class byte
@@ -41,6 +41,10 @@
 #include <immintrin.h>
 #endif
 
+#ifdef __ARM_FEATURE_SVE2
+#include <arm_sve.h>
+#endif
+
 #include "SZo/def.hpp"
 #include "SZo/encoder/Encoder.hpp"
 #include "SZo/utils/MemoryUtil.hpp"
@@ -65,7 +69,7 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
     uint16_t lo_ = 0, mode_ = 0;
     uint8_t method_ = 0;                         // 0=RLE+FSE 1=tANS 2=RLE+ADT2 3=ADT2
     bool use_delta_ = false;                     // forward-diff delta (decided by dzeros)
-    bool scan_avx_ = true;                       // AVX in scan_run (decided by p0>=0.85)
+    bool scan_simd_ = true;                      // SIMD in scan_run (decided by p0>=0.85)
 
     // void derive(const T *bins, size_t num_bin, int stateNum) {
     //     (void)stateNum;
@@ -89,10 +93,10 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
     //     // if (std::getenv("SZO_DUMP_METRICS")) std::fprintf(stderr, "[QM] N=%zu p0=%.5f thr=%.2f method=%d\n", num_bin, p0, thr, method_);
     // }
 
-    static inline size_t scan_run(const T *a, size_t i, size_t n, T mode, bool useAvx) {
+    static inline size_t scan_run(const T *a, size_t i, size_t n, T mode, bool use_simd) {
         size_t s = i;
 #ifdef __AVX2__
-        if (useAvx) {                                    // p0>=0.85 (long runs) -> AVX; else scalar
+        if (use_simd) {                                  // p0>=0.85 (long runs) -> SIMD; else scalar
             const __m256i vm = _mm256_set1_epi16(static_cast<int16_t>(mode));
             while (i + 16 <= n) {
                 __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(a + i));
@@ -101,12 +105,28 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
                 i += 16;
             }
         }
+#elif defined(__ARM_FEATURE_SVE2)
+        if (use_simd) {
+            const size_t lanes = svcnth();
+            const svbool_t pg = svptrue_b16();
+            const int16_t mode_s16 = static_cast<int16_t>(mode);
+            while (i + lanes <= n) {
+                const svint16_t values =
+                    svld1_s16(pg, reinterpret_cast<const int16_t *>(a + i));
+                const svbool_t mismatch = svcmpne_n_s16(pg, values, mode_s16);
+                if (svptest_any(pg, mismatch)) {
+                    const svbool_t before_first = svbrkb_z(pg, mismatch);
+                    return i + svcntp_b16(pg, before_first) - s;
+                }
+                i += lanes;
+            }
+        }
 #endif
         while (i < n && a[i] == mode) i++;
         return i - s;
     }
 
-    // AVX broadcast-store fill: write L copies of mode (decode mirror of scan_run's AVX find)
+    // Write L copies of mode (decode mirror of scan_run's SIMD find).
     static inline void fill_mode(T *dst, size_t L, T mode) {
 // #ifdef __AVX2__
 //         const __m256i vm = _mm256_set1_epi16(static_cast<int16_t>(mode));
@@ -827,7 +847,7 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
         // ONE windowed sample (256 windows x 32 contiguous) -> two signals:
         //   p0     = fraction(code==mode)        : long-run-ness (RLE friendliness)
         //   dzeros = fraction(code==prev) - p0   : extra zeros delta would create (delta benefit)
-        // delta if dzeros>0.005; RLE if p0>=0.80 else o1tans (delta orthogonal); scan-AVX if p0>=0.85.
+        // delta if dzeros>0.005; RLE if p0>=0.80 else o1tans (delta orthogonal); SIMD scan if p0>=0.85.
         const T mode = static_cast<T>(mode_);
         size_t NW = 256, WL = 32;
         if (num_bin < NW * WL) { 
@@ -863,7 +883,7 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
         // table-free RLE+FSE path (method 0) is both smaller AND can't overflow the compress
         // buffer (which is sized from the input), so fall back to it.
         if (num_bin < static_cast<size_t>(20) * O1_NCTX * O1T_NSYM) method_ = 0;
-        scan_avx_ = (p0 >= 0.85);
+        scan_simd_ = (p0 >= 0.85);
     }
 
     size_t encode(const T *bins0, size_t N, uchar *&bytes) {
@@ -879,6 +899,16 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
                 _mm256_storeu_si256(reinterpret_cast<__m256i *>(a + i - 16),
                     _mm256_sub_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i *>(a + i - 16)),
                                      _mm256_loadu_si256(reinterpret_cast<const __m256i *>(a + i - 17))));
+#elif defined(__ARM_FEATURE_SVE2)
+            const size_t lanes = svcnth();
+            const svbool_t pg = svptrue_b16();
+            for (; i >= lanes + 1; i -= lanes) {
+                uint16_t *current = reinterpret_cast<uint16_t *>(a + i - lanes);
+                const uint16_t *previous = reinterpret_cast<const uint16_t *>(a + i - lanes - 1);
+                const svuint16_t delta = svsub_u16_x(
+                    pg, svld1_u16(pg, current), svld1_u16(pg, previous));
+                svst1_u16(pg, current, delta);
+            }
 #endif
             for (; i > 1; i--) a[i - 1] = static_cast<T>(a[i - 1] - a[i - 2]);   // a[0] stays as seed
             bins = a;
@@ -898,7 +928,7 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
         int ran = 0, van = 0;
         size_t i = 0;
         while (i < N) {
-            size_t L = scan_run(bins, i, N, mode, scan_avx_); 
+            size_t L = scan_run(bins, i, N, mode, scan_simd_);
             i += L;
             uint64_t v = L + 1; 
             int k = 63 - __builtin_clzll(v); 
@@ -1011,7 +1041,7 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
         free(drcl);
         free(dvcl);
         }
-        if (use_delta_ && N > 0) {   // un-delta = prefix sum (AVX: 8 int16/block + running carry); flag from stream
+        if (use_delta_ && N > 0) {   // un-delta = prefix sum in SIMD blocks plus a running carry
             size_t i = 1;
 #ifdef __AVX2__
             __m128i carry = _mm_set1_epi16(static_cast<int16_t>(out[0]));
@@ -1026,7 +1056,7 @@ class RleFseEncoder : public concepts::EncoderInterface<T> {
             }
 #endif
             for (; i < N; i++) 
-                out[i] = static_cast<T>(out[i - 1] + out[i]);   // scalar tail (+head if no AVX)
+                out[i] = static_cast<T>(out[i - 1] + out[i]);   // scalar tail (+head if no SIMD)
         }
         return out;
     }

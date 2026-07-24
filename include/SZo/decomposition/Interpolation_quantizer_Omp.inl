@@ -2357,7 +2357,7 @@ namespace SZo {
             svfloat32_t err_dequan = svsub_f32_x(pg, decompressed, ori_sve);
 
             pg_in_range = svand_b_z(pg, svcmpge_n_f32(pg, err_dequan, -real_eb), svcmple_n_f32(pg, err_dequan, real_eb));
-            quant_sve = svsel_f32(pg_in_range, quant_sve, svdup_n_f32(-(float)radius));
+            quant_sve = svsel_f32(pg_in_range, quant_sve, svdup_n_f32(-static_cast<float>(radius)));
     }
 
     template <class T, uint N, class QuantizerOMP>
@@ -2377,7 +2377,7 @@ namespace SZo {
         svfloat64_t err_dequan = svsub_f64_x(pg64, decompressed, ori_sve);
 
         pg_in_range = svand_b_z(pg64, svcmpge_n_f64(pg64, err_dequan, -real_eb), svcmple_n_f64(pg64, err_dequan, real_eb));
-        quant_sve = svsel_f64(pg_in_range, quant_sve, svdup_n_f64(-(double)radius));
+        quant_sve = svsel_f64(pg_in_range, quant_sve, svdup_n_f64(-static_cast<double>(radius)));
     }
 
     template <class T, uint N, class QuantizerOMP>
@@ -2443,7 +2443,7 @@ namespace SZo {
             svfloat32_t err_dequan = svsub_f32_x(pg, decompressed, ori_sve);
 
             pg_in_range = svand_b_z(pg, svcmpge_n_f32(pg, err_dequan, -real_eb), svcmple_n_f32(pg, err_dequan, real_eb));
-            quant_sve = svsel_f32(pg_in_range, quant_sve, svdup_n_f32(-(float)radius));
+            quant_sve = svsel_f32(pg_in_range, quant_sve, svdup_n_f32(-static_cast<float>(radius)));
 
             svint32_t quant_sve_i = svcvt_s32_f32_z(pg, quant_sve);
             svst1(pg, quant_vals, quant_sve_i);
@@ -2574,7 +2574,7 @@ namespace SZo {
             svfloat64_t err_dequan = svsub_f64_x(pg64, decompressed, ori_sve);
 
             pg_in_range = svand_b_z(pg64, svcmpge_n_f64(pg64, err_dequan, -real_eb), svcmple_n_f64(pg64, err_dequan, real_eb));
-            quant_sve = svsel_f64(pg_in_range, quant_sve, svdup_n_f64(-(double)radius));
+            quant_sve = svsel_f64(pg_in_range, quant_sve, svdup_n_f64(-static_cast<double>(radius)));
 
 
             svint64_t quant_sve_i = svcvt_s64_f64_x(pg64, quant_sve);
@@ -2659,7 +2659,6 @@ namespace SZo {
     }
 
 #else
-
     template <class T, uint N, class QuantizerOMP>
     template <COMPMODE CompMode, bool EnableInnerOmp, bool SkipOverwrite, class QuantizeFunc>
     ALWAYS_INLINE void InterpolationDecomposition_OMP<T, N, QuantizerOMP>::interp_linear_and_quantize_1D_line(
