@@ -1,4 +1,4 @@
-# SZo: Ultra-Fast and Scalable High-Ratio Scientific Error-Bounded Lossy Compression on CPUs
+# Pushing the Speed-Ratio Limits of Lossy Compression for Parallel Scientific Applications
 
 ## Build & install
 
